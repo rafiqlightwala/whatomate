@@ -278,6 +278,28 @@ function removeCompletionHeader(key: string) {
   delete formData.value.completion_config.headers[key]
 }
 
+// Step API header helpers
+function addStepHeader(stepIndex: number) {
+  const step = formData.value.steps[stepIndex]
+  if (!step.api_config.headers) {
+    step.api_config.headers = {}
+  }
+  const headerNum = Object.keys(step.api_config.headers).length + 1
+  step.api_config.headers[`Header-${headerNum}`] = ''
+}
+
+function updateStepHeaderKey(stepIndex: number, oldKey: string, newKey: string) {
+  if (oldKey === newKey) return
+  const step = formData.value.steps[stepIndex]
+  const value = step.api_config.headers[oldKey]
+  delete step.api_config.headers[oldKey]
+  step.api_config.headers[newKey] = value
+}
+
+function removeStepHeader(stepIndex: number, key: string) {
+  delete formData.value.steps[stepIndex].api_config.headers[key]
+}
+
 function removeStep(index: number) {
   formData.value.steps.splice(index, 1)
   // Reorder remaining steps
@@ -771,6 +793,42 @@ function removeButton(step: FlowStep, index: number) {
                               />
                               <p class="text-xs text-muted-foreground">Use {{variable}} to include session data</p>
                             </div>
+                          </div>
+
+                          <!-- Headers -->
+                          <div class="space-y-2">
+                            <div class="flex items-center justify-between">
+                              <Label>Headers (optional)</Label>
+                              <Button variant="outline" size="sm" @click="addStepHeader(index)">
+                                <Plus class="h-3 w-3 mr-1" />
+                                Add Header
+                              </Button>
+                            </div>
+                            <div v-if="Object.keys(step.api_config.headers).length > 0" class="space-y-2">
+                              <div
+                                v-for="(value, key) in step.api_config.headers"
+                                :key="key"
+                                class="flex items-center gap-2"
+                              >
+                                <Input
+                                  :model-value="key"
+                                  placeholder="Header name"
+                                  class="flex-1"
+                                  @update:model-value="updateStepHeaderKey(index, key as string, $event)"
+                                />
+                                <Input
+                                  v-model="step.api_config.headers[key as string]"
+                                  placeholder="Header value"
+                                  class="flex-1"
+                                />
+                                <Button variant="ghost" size="icon" @click="removeStepHeader(index, key as string)">
+                                  <Trash2 class="h-4 w-4 text-destructive" />
+                                </Button>
+                              </div>
+                            </div>
+                            <p class="text-xs text-muted-foreground">
+                              Add custom headers like Authorization, API keys. Use {{variable}} for dynamic values.
+                            </p>
                           </div>
 
                           <div v-if="step.api_config.method !== 'GET'" class="space-y-2">
