@@ -187,21 +187,145 @@ test.describe('Account Webhook Info', () => {
   })
 })
 
-test.describe('Account Test Connection', () => {
+test.describe('Account Test Connection Details', () => {
   let accountsPage: AccountsPage
 
   test.beforeEach(async ({ page }) => {
     await loginAsAdmin(page)
     accountsPage = new AccountsPage(page)
+
+    // Mock the GET /accounts to ensure we have a test subject
+    await page.route('**/api/accounts', async route => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: {
+              accounts: [{
+                id: 'test-acc-id',
+                name: 'Test Account',
+                phone_id: '123456',
+                business_id: '789012',
+                status: 'active'
+              }]
+            }
+          })
+        })
+      } else {
+        await route.continue()
+      }
+    })
+
     await accountsPage.goto()
   })
 
-  test('should have test connection button', async ({ page }) => {
-    // Account cards have h3 with account name
-    const accountCard = page.locator('.rounded-xl.border').filter({ has: page.locator('h3') }).first()
-    if (await accountCard.isVisible()) {
-      const testBtn = accountCard.getByRole('button', { name: /Test/i })
-      await expect(testBtn).toBeVisible()
-    }
+  test('should display success state with verified account details', async ({ page }) => {
+    // Mock successful test connection
+    await page.route('**/api/accounts/*/test', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            success: true,
+            display_phone_number: '+1 555 0123',
+            verified_name: 'My Business',
+            quality_rating: 'GREEN',
+            code_verification_status: 'VERIFIED'
+          }
+        })
+      })
+    })
+
+    const accountCard = page.locator('.rounded-xl.border').filter({ hasText: 'Test Account' })
+    await accountCard.getByRole('button', { name: /Test/i }).click()
+
+    // Assertions
+    await expect(accountCard.getByText('Connected')).toBeVisible()
+    await expect(accountCard.getByText('+1 555 0123')).toBeVisible()
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Connection successful' })).toBeVisible()
+
+    // Check for success color/icon context if needed, but text is usually sufficient
+  })
+
+  test('should display error state when connection fails', async ({ page }) => {
+    await page.route('**/api/accounts/*/test', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            success: false,
+            error: 'Invalid access token or permissions'
+          }
+        })
+      })
+    })
+
+    const accountCard = page.locator('.rounded-xl.border').filter({ hasText: 'Test Account' })
+    await accountCard.getByRole('button', { name: /Test/i }).click()
+
+    await expect(accountCard.getByText('Invalid access token or permissions')).toBeVisible()
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: /Connection failed/ })).toBeVisible()
+  })
+
+  test('should display warning for test numbers', async ({ page }) => {
+    await page.route('**/api/accounts/*/test', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            success: true,
+            display_phone_number: '+1 555 9999',
+            is_test_number: true,
+            warning: 'This is a trial number, messaging limits apply'
+          }
+        })
+      })
+    })
+
+    const accountCard = page.locator('.rounded-xl.border').filter({ hasText: 'Test Account' })
+    await accountCard.getByRole('button', { name: /Test/i }).click()
+
+    await expect(accountCard.getByText('Test Number')).toBeVisible()
+    await expect(accountCard.getByText('This is a trial number, messaging limits apply')).toBeVisible()
+  })
+
+  test('should show loading state while testing connection', async ({ page }) => {
+    // Intercept and delay request to verify loading state
+    let fulfillCallback: () => void;
+    const responsePromise = new Promise<void>((resolve) => {
+      fulfillCallback = resolve;
+    });
+
+    await page.route('**/api/accounts/*/test', async route => {
+      await responsePromise;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { success: true } })
+      })
+    });
+
+    const accountCard = page.locator('.rounded-xl.border').filter({ hasText: 'Test Account' })
+    const testBtn = accountCard.getByRole('button', { name: /Test/i })
+
+    // Start the action
+    await testBtn.click()
+
+    // Verify loading state
+    await expect(testBtn).toBeDisabled()
+    // Check for the loader icon (lucide-loader-2 typically has a specific class or we can check for the svg)
+    // Based on the vue file: <Loader2 ... class="animate-spin" />
+    await expect(testBtn.locator('.animate-spin')).toBeVisible()
+
+    // Finish the request
+    fulfillCallback!()
+
+    // Verify loading state ends
+    await expect(testBtn).not.toBeDisabled()
+    await expect(testBtn.locator('.animate-spin')).not.toBeVisible()
   })
 })

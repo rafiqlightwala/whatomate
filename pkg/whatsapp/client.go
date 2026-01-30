@@ -115,6 +115,88 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body interfa
 	return respBody, nil
 }
 
+// CredentialsValidationResult contains the result of credentials validation
+type CredentialsValidationResult struct {
+	PhoneNumber    string
+	VerifiedName   string
+	AccountMode    string
+	IsTestNumber   bool
+	QualityRating  string
+}
+
+// ValidateCredentials validates WhatsApp account credentials with Meta API
+// It checks the phone number endpoint, business account endpoint, and verifies
+// that the phone number belongs to the specified business account
+func (c *Client) ValidateCredentials(ctx context.Context, phoneID, businessID, accessToken, apiVersion string) (*CredentialsValidationResult, error) {
+	// 1. Validate PhoneID
+	phoneURL := fmt.Sprintf("%s/%s/%s?fields=display_phone_number,verified_name,code_verification_status,account_mode,quality_rating",
+		c.getBaseURL(), apiVersion, phoneID)
+	phoneBody, err := c.doRequest(ctx, http.MethodGet, phoneURL, nil, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("invalid phone_id or access_token: %w", err)
+	}
+
+	var phoneResult struct {
+		DisplayPhoneNumber     string `json:"display_phone_number"`
+		VerifiedName           string `json:"verified_name"`
+		AccountMode            string `json:"account_mode"`
+		CodeVerificationStatus string `json:"code_verification_status"`
+		QualityRating          string `json:"quality_rating"`
+	}
+	if err := json.Unmarshal(phoneBody, &phoneResult); err != nil {
+		return nil, fmt.Errorf("failed to parse phone response: %w", err)
+	}
+
+	// Check verification status (skip for sandbox/test numbers)
+	isTestNumber := phoneResult.AccountMode == "SANDBOX"
+	if !isTestNumber {
+		if phoneResult.CodeVerificationStatus == "NOT_VERIFIED" || phoneResult.CodeVerificationStatus == "EXPIRED" {
+			return nil, fmt.Errorf("phone number is not verified (status: %s). Please register it at: https://business.facebook.com/wa/manage/phone-numbers/", phoneResult.CodeVerificationStatus)
+		}
+	}
+
+	// 2. Validate BusinessID
+	businessURL := fmt.Sprintf("%s/%s/%s?fields=id,name", c.getBaseURL(), apiVersion, businessID)
+	if _, err := c.doRequest(ctx, http.MethodGet, businessURL, nil, accessToken); err != nil {
+		return nil, fmt.Errorf("invalid business_id: %w", err)
+	}
+
+	// 3. Verify phone belongs to business account
+	phonesURL := fmt.Sprintf("%s/%s/%s/phone_numbers", c.getBaseURL(), apiVersion, businessID)
+	phonesBody, err := c.doRequest(ctx, http.MethodGet, phonesURL, nil, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify phone-business relationship: %w", err)
+	}
+
+	var phonesResult struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(phonesBody, &phonesResult); err != nil {
+		return nil, fmt.Errorf("failed to parse phone numbers list: %w", err)
+	}
+
+	phoneFound := false
+	for _, phone := range phonesResult.Data {
+		if phone.ID == phoneID {
+			phoneFound = true
+			break
+		}
+	}
+	if !phoneFound {
+		return nil, fmt.Errorf("phone_id '%s' does not belong to business_id '%s'. Please verify your configuration", phoneID, businessID)
+	}
+
+	return &CredentialsValidationResult{
+		PhoneNumber:   phoneResult.DisplayPhoneNumber,
+		VerifiedName:  phoneResult.VerifiedName,
+		AccountMode:   phoneResult.AccountMode,
+		IsTestNumber:  isTestNumber,
+		QualityRating: phoneResult.QualityRating,
+	}, nil
+}
+
 // buildMessagesURL builds the messages endpoint URL
 func (c *Client) buildMessagesURL(account *Account) string {
 	return fmt.Sprintf("%s/%s/%s/messages", c.getBaseURL(), account.APIVersion, account.PhoneID)

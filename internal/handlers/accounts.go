@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -263,6 +264,7 @@ func (a *App) DeleteAccount(r *fastglue.Request) error {
 }
 
 // TestAccountConnection tests the WhatsApp API connection
+// This validates both PhoneID and BusinessID to ensure all credentials are correct
 func (a *App) TestAccountConnection(r *fastglue.Request) error {
 	orgID, err := a.getOrgID(r)
 	if err != nil {
@@ -279,8 +281,17 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 		return nil
 	}
 
-	// Test the connection by fetching phone number details from Meta API
-	url := fmt.Sprintf("%s/%s/%s?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier",
+	// Use the comprehensive validation function
+	if err := a.validateAccountCredentials(account.PhoneID, account.BusinessID, account.AccessToken, account.APIVersion); err != nil {
+		a.Log.Error("Account test failed", "error", err, "account", account.Name)
+		return r.SendEnvelope(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+	}
+
+	// Fetch additional details for display
+	url := fmt.Sprintf("%s/%s/%s?fields=display_phone_number,verified_name,code_verification_status,account_mode,quality_rating,messaging_limit_tier",
 		a.Config.WhatsApp.BaseURL, account.APIVersion, account.PhoneID)
 
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
@@ -310,13 +321,28 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 	var result map[string]interface{}
 	_ = json.Unmarshal(body, &result)
 
-	return r.SendEnvelope(map[string]interface{}{
-		"success":              true,
-		"display_phone_number": result["display_phone_number"],
-		"verified_name":        result["verified_name"],
-		"quality_rating":       result["quality_rating"],
-		"messaging_limit_tier": result["messaging_limit_tier"],
-	})
+	// Check if this is a test/sandbox number
+	accountMode, _ := result["account_mode"].(string)
+	isTestNumber := accountMode == "SANDBOX"
+
+	// Prepare response
+	response := map[string]interface{}{
+		"success":                  true,
+		"display_phone_number":     result["display_phone_number"],
+		"verified_name":            result["verified_name"],
+		"quality_rating":           result["quality_rating"],
+		"messaging_limit_tier":     result["messaging_limit_tier"],
+		"code_verification_status": result["code_verification_status"],
+		"account_mode":             result["account_mode"],
+		"is_test_number":           isTestNumber,
+	}
+
+	// Add warning for test/sandbox numbers
+	if isTestNumber {
+		response["warning"] = "This is a test/sandbox number. Not suitable for production use."
+	}
+
+	return r.SendEnvelope(response)
 }
 
 // Helper functions
@@ -347,3 +373,13 @@ func generateVerifyToken() string {
 	return hex.EncodeToString(bytes)
 }
 
+// validateAccountCredentials validates WhatsApp account credentials with Meta API
+func (a *App) validateAccountCredentials(phoneID, businessID, accessToken, apiVersion string) error {
+	ctx := context.Background()
+	_, err := a.WhatsApp.ValidateCredentials(ctx, phoneID, businessID, accessToken, apiVersion)
+	if err != nil {
+		return err
+	}
+	a.Log.Info("Account credentials validated successfully", "phone_id", phoneID, "business_id", businessID)
+	return nil
+}
