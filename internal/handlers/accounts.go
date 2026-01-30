@@ -337,9 +337,11 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 		"is_test_number":           isTestNumber,
 	}
 
-	// Add warning for test/sandbox numbers
+	// Add warning for test/sandbox numbers or expired verification
 	if isTestNumber {
 		response["warning"] = "This is a test/sandbox number. Not suitable for production use."
+	} else if verificationStatus, ok := result["code_verification_status"].(string); ok && verificationStatus == "EXPIRED" {
+		response["warning"] = "Phone verification has expired. Consider re-verifying at: https://business.facebook.com/wa/manage/phone-numbers/"
 	}
 
 	return r.SendEnvelope(response)
