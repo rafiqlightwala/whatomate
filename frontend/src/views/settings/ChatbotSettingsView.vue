@@ -113,7 +113,7 @@ const isAIEnabled = ref(false)
 const aiProviders = [
   { value: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'] },
   { value: 'anthropic', label: 'Anthropic', models: ['claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest', 'claude-3-opus-latest'] },
-  { value: 'google', label: 'Google AI', models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'] }
+  { value: 'google', label: 'Google AI', models: ['gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'] }
 ]
 
 const availableModels = computed(() => {
@@ -123,6 +123,22 @@ const availableModels = computed(() => {
 
 watch(isAIEnabled, (newValue) => {
   aiSettings.value.ai_enabled = newValue
+})
+
+watch(() => aiSettings.value.ai_provider, (provider, previousProvider) => {
+  const providerConfig = aiProviders.find(p => p.value === provider)
+  if (!providerConfig) {
+    aiSettings.value.ai_model = ''
+    return
+  }
+
+  const previousProviderConfig = aiProviders.find(p => p.value === previousProvider)
+  const currentModel = aiSettings.value.ai_model
+  const cameFromPreviousProvider = previousProviderConfig?.models.includes(currentModel)
+
+  if (!currentModel || cameFromPreviousProvider) {
+    aiSettings.value.ai_model = providerConfig.models[0] || ''
+  }
 })
 
 // SLA Settings
