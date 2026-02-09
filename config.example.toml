@@ -8,6 +8,7 @@
 name = "Whatomate"
 environment = "development"  # development, staging, production
 debug = true
+encryption_key = ""  # AES-256 key for encrypting secrets at rest (32+ chars, required in production)
 
 [server]
 host = "0.0.0.0"
@@ -15,6 +16,7 @@ port = 8080
 read_timeout = 30
 write_timeout = 30
 base_path = ""  # Set to "/subpath" if behind nginx proxy pass
+allowed_origins = ""  # Comma-separated CORS origins (e.g., "https://app.example.com,https://admin.example.com"). Empty = allow all (dev only).
 
 [database]
 host = "db"  # Use "localhost" for local development
@@ -34,9 +36,9 @@ password = ""
 db = 0
 
 [jwt]
-secret = "your-super-secret-jwt-key-change-in-production"
+secret = "your-super-secret-jwt-key-change-in-production"  # Must be 32+ chars in production
 access_expiry_mins = 15
-refresh_expiry_days = 7
+refresh_expiry_days = 1
 
 [storage]
 type = "local"  # local, s3
