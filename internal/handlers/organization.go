@@ -280,6 +280,13 @@ func (a *App) CreateOrganization(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create organization", nil, "")
 	}
 
+	// Seed builtin keyword replies for this organization.
+	if err := a.SeedBuiltinInvestifyForOrganization(tx, org.ID); err != nil {
+		tx.Rollback()
+		a.Log.Error("Failed to seed builtin keyword rules", "error", err, "org_id", org.ID)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create organization", nil, "")
+	}
+
 	// Get admin role for this org and add the creator as admin
 	var adminRole models.CustomRole
 	if err := tx.Where("organization_id = ? AND name = ? AND is_system = ?", org.ID, "admin", true).First(&adminRole).Error; err != nil {

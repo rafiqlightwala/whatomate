@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shridarpatil/whatomate/internal/builtin"
 	"github.com/shridarpatil/whatomate/internal/contactutil"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/internal/websocket"
@@ -357,11 +358,38 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		}
 		// Within business hours - send transfer message and create transfer
 		if keywordResponse.Body != "" {
-			if err := a.sendAndSaveTextMessage(account, contact, keywordResponse.Body); err != nil {
+			if err := a.sendAndSaveTextMessageWithDelayRange(account, contact, keywordResponse.Body, keywordResponse.DelayMinSec, keywordResponse.DelayMaxSec); err != nil {
 				a.Log.Error("Failed to send transfer message", "error", err, "contact", contact.PhoneNumber)
 			}
 		}
 		a.createTransferFromKeyword(account, contact)
+		return
+	}
+
+	// Handle non-transfer keyword matches before flow triggers/greeting/AI.
+	// This ensures deterministic keyword behavior and avoids AI taking over
+	// when a keyword rule is intended to respond.
+	if keywordMatched && keywordResponse.ResponseType != models.ResponseTypeTransfer {
+		a.Log.Info("Keyword rule matched", "response_type", keywordResponse.ResponseType, "response", keywordResponse.Body)
+
+		if len(keywordResponse.Buttons) > 0 {
+			if err := a.sendAndSaveInteractiveButtonsWithDelayRange(account, contact, keywordResponse.Body, keywordResponse.Buttons, keywordResponse.DelayMinSec, keywordResponse.DelayMaxSec); err != nil {
+				a.Log.Error("Failed to send interactive buttons", "error", err, "contact", contact.PhoneNumber)
+			}
+		} else {
+			if err := a.sendAndSaveTextMessageWithDelayRange(account, contact, keywordResponse.Body, keywordResponse.DelayMinSec, keywordResponse.DelayMaxSec); err != nil {
+				a.Log.Error("Failed to send text message", "error", err, "contact", contact.PhoneNumber)
+			}
+		}
+		a.logSessionMessage(session.ID, models.DirectionOutgoing, keywordResponse.Body, "keyword_response")
+
+		if keywordResponse.ReplyID == "broker_information" {
+			if err := a.sendAndSaveBuiltInBrokerPDF(account, contact); err != nil {
+				a.Log.Error("Failed to send broker PDF", "error", err, "contact", contact.PhoneNumber)
+			} else {
+				a.logSessionMessage(session.ID, models.DirectionOutgoing, "[Document: ListOfBrokersPSX.pdf]", "keyword_response_document")
+			}
+		}
 		return
 	}
 
@@ -403,25 +431,6 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		}
 		a.logSessionMessage(session.ID, models.DirectionOutgoing, settings.DefaultResponse, "greeting")
 		return // After greeting, don't process further for new sessions
-	}
-
-	// Handle non-transfer keyword matches (transfer was already handled above)
-	if keywordMatched && keywordResponse.ResponseType != models.ResponseTypeTransfer {
-		a.Log.Info("Keyword rule matched", "response_type", keywordResponse.ResponseType, "response", keywordResponse.Body)
-
-		// Handle regular text response
-		if len(keywordResponse.Buttons) > 0 {
-			if err := a.sendAndSaveInteractiveButtons(account, contact, keywordResponse.Body, keywordResponse.Buttons); err != nil {
-				a.Log.Error("Failed to send interactive buttons", "error", err, "contact", contact.PhoneNumber)
-			}
-		} else {
-			if err := a.sendAndSaveTextMessage(account, contact, keywordResponse.Body); err != nil {
-				a.Log.Error("Failed to send text message", "error", err, "contact", contact.PhoneNumber)
-			}
-		}
-		// Log outgoing message
-		a.logSessionMessage(session.ID, models.DirectionOutgoing, keywordResponse.Body, "keyword_response")
-		return
 	}
 
 	// If no keyword matched, try AI response if enabled
@@ -481,6 +490,9 @@ type KeywordResponse struct {
 	Body         string
 	Buttons      []map[string]interface{}
 	ResponseType models.ResponseType // text, transfer
+	DelayMinSec  int
+	DelayMaxSec  int
+	ReplyID      string
 }
 
 // matchKeywordRules checks if the message matches any keyword rules
@@ -519,7 +531,11 @@ func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string
 					matched = strings.HasPrefix(messageLower, keywordLower)
 				}
 			case models.MatchTypeRegex:
-				re, err := regexp.Compile(keyword)
+				pattern := keyword
+				if !rule.CaseSensitive {
+					pattern = "(?i)" + pattern
+				}
+				re, err := regexp.Compile(pattern)
 				if err == nil {
 					matched = re.MatchString(messageText)
 				}
@@ -556,6 +572,21 @@ func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string
 					}
 				}
 
+				if delayRange, ok := rule.ResponseContent["delay_range"].(map[string]interface{}); ok {
+					if minVal, ok := delayRange["min"].(float64); ok {
+						response.DelayMinSec = int(minVal)
+					}
+					if maxVal, ok := delayRange["max"].(float64); ok {
+						response.DelayMaxSec = int(maxVal)
+					}
+				}
+				if replyID, ok := rule.ResponseContent["reply_id"].(string); ok {
+					response.ReplyID = replyID
+				}
+				if response.ReplyID == "" && strings.Contains(strings.ToLower(rule.Name), "broker") {
+					response.ReplyID = "broker_information"
+				}
+
 				if response.Body != "" {
 					return response, true
 				}
@@ -569,8 +600,20 @@ func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string
 // sendAndSaveTextMessage sends a text message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveTextMessage(account *models.WhatsAppAccount, contact *models.Contact, message string) error {
-	a.applyChatbotReplyDelay()
+	a.applyChatbotReplyDelayForContact(account, contact)
+	return a.sendAndSaveTextMessageRaw(account, contact, message)
+}
 
+func (a *App) sendAndSaveTextMessageWithDelayRange(account *models.WhatsAppAccount, contact *models.Contact, message string, minSec, maxSec int) error {
+	if minSec > 0 || maxSec > 0 {
+		a.applyChatbotReplyDelayRangeForContact(account, contact, minSec, maxSec)
+	} else {
+		a.applyChatbotReplyDelayForContact(account, contact)
+	}
+	return a.sendAndSaveTextMessageRaw(account, contact, message)
+}
+
+func (a *App) sendAndSaveTextMessageRaw(account *models.WhatsAppAccount, contact *models.Contact, message string) error {
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
 		Account: account,
@@ -584,6 +627,20 @@ func (a *App) sendAndSaveTextMessage(account *models.WhatsAppAccount, contact *m
 // sendAndSaveInteractiveButtons sends an interactive button message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveInteractiveButtons(account *models.WhatsAppAccount, contact *models.Contact, bodyText string, buttons []map[string]interface{}) error {
+	a.applyChatbotReplyDelayForContact(account, contact)
+	return a.sendAndSaveInteractiveButtonsRaw(account, contact, bodyText, buttons)
+}
+
+func (a *App) sendAndSaveInteractiveButtonsWithDelayRange(account *models.WhatsAppAccount, contact *models.Contact, bodyText string, buttons []map[string]interface{}, minSec, maxSec int) error {
+	if minSec > 0 || maxSec > 0 {
+		a.applyChatbotReplyDelayRangeForContact(account, contact, minSec, maxSec)
+	} else {
+		a.applyChatbotReplyDelayForContact(account, contact)
+	}
+	return a.sendAndSaveInteractiveButtonsRaw(account, contact, bodyText, buttons)
+}
+
+func (a *App) sendAndSaveInteractiveButtonsRaw(account *models.WhatsAppAccount, contact *models.Contact, bodyText string, buttons []map[string]interface{}) error {
 	// Convert buttons to whatsapp.Button format
 	waButtons := make([]whatsapp.Button, 0, len(buttons))
 	for i, btn := range buttons {
@@ -606,10 +663,8 @@ func (a *App) sendAndSaveInteractiveButtons(account *models.WhatsAppAccount, con
 
 	// Fall back to text if no buttons
 	if len(waButtons) == 0 {
-		return a.sendAndSaveTextMessage(account, contact, bodyText)
+		return a.sendAndSaveTextMessageRaw(account, contact, bodyText)
 	}
-
-	a.applyChatbotReplyDelay()
 
 	// Determine interactive type based on button count
 	interactiveType := "button"
@@ -632,7 +687,7 @@ func (a *App) sendAndSaveInteractiveButtons(account *models.WhatsAppAccount, con
 // sendAndSaveCTAURLButton sends a CTA URL button message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveCTAURLButton(account *models.WhatsAppAccount, contact *models.Contact, bodyText, buttonText, url string) error {
-	a.applyChatbotReplyDelay()
+	a.applyChatbotReplyDelayForContact(account, contact)
 
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
@@ -650,7 +705,7 @@ func (a *App) sendAndSaveCTAURLButton(account *models.WhatsAppAccount, contact *
 // sendAndSaveFlowMessage sends a WhatsApp Flow message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveFlowMessage(account *models.WhatsAppAccount, contact *models.Contact, flowID, headerText, bodyText, ctaText, flowToken, firstScreen string) error {
-	a.applyChatbotReplyDelay()
+	a.applyChatbotReplyDelayForContact(account, contact)
 
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
@@ -667,12 +722,100 @@ func (a *App) sendAndSaveFlowMessage(account *models.WhatsAppAccount, contact *m
 	return err
 }
 
+func (a *App) sendAndSaveBuiltInBrokerPDF(account *models.WhatsAppAccount, contact *models.Contact) error {
+	pdfData, defaultName := builtin.LoadBrokersPDF()
+	if len(pdfData) == 0 {
+		return fmt.Errorf("builtin broker PDF is empty")
+	}
+
+	filename := defaultName
+	caption := ""
+	if a.Config != nil {
+		if strings.TrimSpace(a.Config.Builtin.BrokerPDFFilename) != "" {
+			filename = strings.TrimSpace(a.Config.Builtin.BrokerPDFFilename)
+		}
+		caption = strings.TrimSpace(a.Config.Builtin.BrokerPDFCaption)
+	}
+	if filename == "" {
+		filename = "ListOfBrokersPSX.pdf"
+	}
+
+	const mimeType = "application/pdf"
+	localPath, err := a.saveMediaLocally(pdfData, mimeType, filename)
+	if err != nil {
+		return fmt.Errorf("failed to persist broker PDF locally: %w", err)
+	}
+
+	_, err = a.SendOutgoingMessage(context.Background(), OutgoingMessageRequest{
+		Account:       account,
+		Contact:       contact,
+		Type:          models.MessageTypeDocument,
+		MediaData:     pdfData,
+		MediaURL:      localPath,
+		MediaMimeType: mimeType,
+		MediaFilename: filename,
+		Caption:       caption,
+	}, ChatbotSendOptions())
+	if err != nil {
+		return fmt.Errorf("failed to send broker PDF: %w", err)
+	}
+
+	return nil
+}
+
 func (a *App) applyChatbotReplyDelay() {
 	if a == nil || a.Config == nil || !a.Config.ChatbotDelay.Enabled {
 		return
 	}
+	a.applyChatbotReplyDelayRange(a.Config.ChatbotDelay.MinSeconds, a.Config.ChatbotDelay.MaxSeconds)
+}
 
-	minDelay, maxDelay := chatbotReplyDelayBounds(a.Config.ChatbotDelay.MinSeconds, a.Config.ChatbotDelay.MaxSeconds)
+func (a *App) applyChatbotReplyDelayForContact(account *models.WhatsAppAccount, contact *models.Contact) {
+	if a == nil || a.Config == nil || !a.Config.ChatbotDelay.Enabled {
+		return
+	}
+	a.applyChatbotReplyDelayRangeForContact(account, contact, a.Config.ChatbotDelay.MinSeconds, a.Config.ChatbotDelay.MaxSeconds)
+}
+
+func (a *App) applyChatbotReplyDelayRangeForContact(account *models.WhatsAppAccount, contact *models.Contact, minSecs, maxSecs int) {
+	if a == nil || a.Config == nil || !a.Config.ChatbotDelay.Enabled {
+		return
+	}
+
+	// Best-effort typing indicator; failures should not block sending.
+	a.sendTypingIndicatorForLatestIncoming(account, contact)
+	a.applyChatbotReplyDelayRange(minSecs, maxSecs)
+}
+
+func (a *App) sendTypingIndicatorForLatestIncoming(account *models.WhatsAppAccount, contact *models.Contact) {
+	if a == nil || a.WhatsApp == nil || account == nil || contact == nil {
+		return
+	}
+
+	var incoming models.Message
+	err := a.DB.
+		Select("whats_app_message_id").
+		Where("organization_id = ? AND whats_app_account = ? AND contact_id = ? AND direction = ? AND whats_app_message_id <> ''",
+			account.OrganizationID, account.Name, contact.ID, models.DirectionIncoming).
+		Order("created_at DESC").
+		First(&incoming).Error
+	if err != nil || incoming.WhatsAppMessageID == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.WhatsApp.SendTypingIndicator(ctx, a.toWhatsAppAccount(account), incoming.WhatsAppMessageID); err != nil {
+		a.Log.Debug("Failed to send typing indicator", "error", err, "contact", contact.PhoneNumber)
+	}
+}
+
+func (a *App) applyChatbotReplyDelayRange(minSecs, maxSecs int) {
+	if a == nil || a.Config == nil || !a.Config.ChatbotDelay.Enabled {
+		return
+	}
+
+	minDelay, maxDelay := chatbotReplyDelayBounds(minSecs, maxSecs)
 	if maxDelay < minDelay {
 		maxDelay = minDelay
 	}
@@ -698,7 +841,6 @@ func chatbotReplyDelayBounds(minSecs, maxSecs int) (time.Duration, time.Duration
 	}
 	return time.Duration(minSecs) * time.Second, time.Duration(maxSecs) * time.Second
 }
-
 
 // getOrCreateSession finds an active session or creates a new one
 // Returns the session and a boolean indicating if it's a new session

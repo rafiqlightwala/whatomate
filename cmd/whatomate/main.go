@@ -194,6 +194,11 @@ func runServer(args []string) {
 		HTTPClient: httpClient,
 	}
 
+	// Ensure builtin keyword packs are present for all organizations.
+	if err := app.SeedBuiltinInvestifyForAllOrganizations(); err != nil {
+		lo.Fatal("Failed to seed builtin keyword rules", "error", err)
+	}
+
 	// Start campaign stats subscriber for real-time WebSocket updates from worker
 	if err := app.StartCampaignStatsSubscriber(); err != nil {
 		lo.Error("Failed to start campaign stats subscriber", "error", err)

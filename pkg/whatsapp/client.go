@@ -495,6 +495,34 @@ func (c *Client) MarkMessageRead(ctx context.Context, account *Account, messageI
 	return nil
 }
 
+// SendTypingIndicator sends a typing indicator for an incoming message.
+// WhatsApp requires the context message_id and currently supports type "text".
+func (c *Client) SendTypingIndicator(ctx context.Context, account *Account, messageID string) error {
+	if messageID == "" {
+		return fmt.Errorf("message_id is required")
+	}
+
+	payload := map[string]interface{}{
+		"messaging_product": "whatsapp",
+		"status":            "read",
+		"message_id":        messageID,
+		"typing_indicator": map[string]interface{}{
+			"type": "text",
+		},
+	}
+
+	url := c.buildMessagesURL(account)
+	c.Log.Debug("Sending typing indicator", "message_id", messageID)
+
+	_, err := c.doRequest(ctx, "POST", url, payload, account.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to send typing indicator: %w", err)
+	}
+
+	c.Log.Debug("Typing indicator sent", "message_id", messageID)
+	return nil
+}
+
 // ResumableUploadResponse represents response from creating upload session
 type ResumableUploadResponse struct {
 	ID string `json:"id"` // Upload session ID

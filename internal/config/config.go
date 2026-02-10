@@ -13,6 +13,7 @@ import (
 type Config struct {
 	App           AppConfig           `koanf:"app"`
 	ChatbotDelay  ChatbotDelayConfig  `koanf:"chatbot_delay"`
+	Builtin       BuiltinConfig       `koanf:"builtin"`
 	Server        ServerConfig        `koanf:"server"`
 	Database      DatabaseConfig      `koanf:"database"`
 	Redis         RedisConfig         `koanf:"redis"`
@@ -34,6 +35,12 @@ type ChatbotDelayConfig struct {
 	Enabled    bool `koanf:"enabled"`
 	MinSeconds int  `koanf:"min_seconds"`
 	MaxSeconds int  `koanf:"max_seconds"`
+}
+
+type BuiltinConfig struct {
+	BrokerPDFURL      string `koanf:"broker_pdf_url"`
+	BrokerPDFFilename string `koanf:"broker_pdf_filename"`
+	BrokerPDFCaption  string `koanf:"broker_pdf_caption"`
 }
 
 type ServerConfig struct {
@@ -187,6 +194,12 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.ChatbotDelay.MaxSeconds <= 0 {
 		cfg.ChatbotDelay.MaxSeconds = 120
+	}
+	if cfg.Builtin.BrokerPDFFilename == "" {
+		cfg.Builtin.BrokerPDFFilename = "psx-brokers.pdf"
+	}
+	if cfg.Builtin.BrokerPDFCaption == "" {
+		cfg.Builtin.BrokerPDFCaption = "Official broker list"
 	}
 	// Default admin credentials (only used during initial setup)
 	if cfg.DefaultAdmin.Email == "" {

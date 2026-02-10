@@ -15,6 +15,11 @@ enabled = false
 min_seconds = 60
 max_seconds = 120
 
+[builtin]
+broker_pdf_url = ""                # Optional: PDF URL to auto-send on broker keyword replies
+broker_pdf_filename = "psx-brokers.pdf"
+broker_pdf_caption = "Official broker list"
+
 [server]
 host = "0.0.0.0"
 port = 8080
