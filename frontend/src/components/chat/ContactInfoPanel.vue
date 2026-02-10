@@ -24,7 +24,8 @@ import {
 } from '@/components/ui/command'
 import { X, ChevronDown, Phone, User, Plus, Check, Tags, Loader2 } from 'lucide-vue-next'
 import { TagBadge } from '@/components/ui/tag-badge'
-import { getInitials, getAvatarGradient } from '@/lib/utils'
+import MetadataSection from '@/components/chat/MetadataSection.vue'
+import { getInitials, getAvatarGradient, formatLabel } from '@/lib/utils'
 import { getTagColorClass } from '@/lib/constants'
 import { useTagsStore } from '@/stores/tags'
 import { useAuthStore } from '@/stores/auth'
@@ -174,6 +175,26 @@ const contactTags = computed(() => {
   return props.contact.tags as string[]
 })
 
+// Contact metadata
+const hasMetadata = computed(() => {
+  const md = props.contact.metadata
+  return md && typeof md === 'object' && Object.keys(md).length > 0
+})
+
+const metadataPrimitives = computed(() => {
+  if (!hasMetadata.value) return []
+  return Object.entries(props.contact.metadata).filter(
+    ([, v]) => v === null || typeof v !== 'object'
+  )
+})
+
+const metadataSections = computed(() => {
+  if (!hasMetadata.value) return []
+  return Object.entries(props.contact.metadata).filter(
+    ([, v]) => v !== null && typeof v === 'object'
+  )
+})
+
 // Get tag details for display
 function getTagDetails(tagName: string): Tag | undefined {
   return tagsStore.getTagByName(tagName)
@@ -264,7 +285,7 @@ async function updateContactTags(tags: string[]) {
         </div>
 
         <!-- Tags Section (always shown) -->
-        <div class="border-b pb-4">
+        <div class="pb-4">
           <div class="flex items-center justify-between py-2">
             <h5 class="text-sm font-medium flex items-center gap-2">
               <Tags class="h-4 w-4 text-muted-foreground" />
@@ -330,8 +351,25 @@ async function updateContactTags(tags: string[]) {
           </div>
         </div>
 
+        <!-- Contact Metadata -->
+        <div v-if="hasMetadata" class="space-y-3">
+          <!-- General section: top-level primitives -->
+          <MetadataSection
+            v-if="metadataPrimitives.length > 0"
+            label="General"
+            :data="Object.fromEntries(metadataPrimitives)"
+          />
+          <!-- Object / array sections -->
+          <MetadataSection
+            v-for="[key, val] in metadataSections"
+            :key="key"
+            :label="formatLabel(key)"
+            :data="val"
+          />
+        </div>
+
         <!-- No Session Data or no panel config -->
-        <div v-if="!props.sessionData || sortedSections.length === 0" class="text-center py-6 text-muted-foreground">
+        <div v-if="!props.sessionData || sortedSections.length === 0" class="text-center py-6 text-muted-foreground border-t">
           <User class="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p class="text-sm">No data configured</p>
           <p class="text-xs mt-1">Configure panel display in the chatbot flow settings.</p>

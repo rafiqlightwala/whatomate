@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/shridarpatil/whatomate/internal/crypto"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
@@ -104,14 +105,26 @@ func (a *App) CreateAccount(r *fastglue.Request) error {
 		apiVersion = "v21.0"
 	}
 
+	encKey := a.Config.App.EncryptionKey
+	encAccessToken, err := crypto.Encrypt(req.AccessToken, encKey)
+	if err != nil {
+		a.Log.Error("Failed to encrypt access token", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create account", nil, "")
+	}
+	encAppSecret, err := crypto.Encrypt(req.AppSecret, encKey)
+	if err != nil {
+		a.Log.Error("Failed to encrypt app secret", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create account", nil, "")
+	}
+
 	account := models.WhatsAppAccount{
 		OrganizationID:     orgID,
 		Name:               req.Name,
 		AppID:              req.AppID,
 		PhoneID:            req.PhoneID,
 		BusinessID:         req.BusinessID,
-		AccessToken:        req.AccessToken, // TODO: encrypt before storing
-		AppSecret:          req.AppSecret,   // Meta App Secret for webhook signature verification
+		AccessToken:        encAccessToken,
+		AppSecret:          encAppSecret,
 		WebhookVerifyToken: webhookVerifyToken,
 		APIVersion:         apiVersion,
 		IsDefaultIncoming:  req.IsDefaultIncoming,
@@ -176,6 +189,7 @@ func (a *App) UpdateAccount(r *fastglue.Request) error {
 	if err != nil {
 		return nil
 	}
+	a.decryptAccountSecrets(account)
 
 	var req AccountRequest
 	if err := a.decodeRequest(r, &req); err != nil {
@@ -196,10 +210,20 @@ func (a *App) UpdateAccount(r *fastglue.Request) error {
 		account.BusinessID = req.BusinessID
 	}
 	if req.AccessToken != "" {
-		account.AccessToken = req.AccessToken // TODO: encrypt
+		enc, err := crypto.Encrypt(req.AccessToken, a.Config.App.EncryptionKey)
+		if err != nil {
+			a.Log.Error("Failed to encrypt access token", "error", err)
+			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update account", nil, "")
+		}
+		account.AccessToken = enc
 	}
 	if req.AppSecret != "" {
-		account.AppSecret = req.AppSecret
+		enc, err := crypto.Encrypt(req.AppSecret, a.Config.App.EncryptionKey)
+		if err != nil {
+			a.Log.Error("Failed to encrypt app secret", "error", err)
+			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update account", nil, "")
+		}
+		account.AppSecret = enc
 	}
 	if req.WebhookVerifyToken != "" {
 		account.WebhookVerifyToken = req.WebhookVerifyToken
@@ -280,13 +304,14 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 	if err != nil {
 		return nil
 	}
+	a.decryptAccountSecrets(account)
 
 	// Use the comprehensive validation function
 	if err := a.validateAccountCredentials(account.PhoneID, account.BusinessID, account.AccessToken, account.APIVersion); err != nil {
 		a.Log.Error("Account test failed", "error", err, "account", account.Name)
 		return r.SendEnvelope(map[string]interface{}{
 			"success": false,
-			"error":   err.Error(),
+			"error":   "Account credential validation failed. Check your access token and phone ID.",
 		})
 	}
 
@@ -299,9 +324,10 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 
 	resp, err := a.HTTPClient.Do(req)
 	if err != nil {
+		a.Log.Error("Failed to connect to WhatsApp API", "error", err)
 		return r.SendEnvelope(map[string]interface{}{
 			"success": false,
-			"error":   "Failed to connect to WhatsApp API: " + err.Error(),
+			"error":   "Failed to connect to WhatsApp API",
 		})
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -403,6 +429,7 @@ func (a *App) SubscribeApp(r *fastglue.Request) error {
 	if err != nil {
 		return nil
 	}
+	a.decryptAccountSecrets(account)
 
 	// Subscribe the app to webhooks
 	ctx := context.Background()
@@ -410,7 +437,7 @@ func (a *App) SubscribeApp(r *fastglue.Request) error {
 		a.Log.Error("Failed to subscribe app to webhooks", "error", err, "account", account.Name)
 		return r.SendEnvelope(map[string]interface{}{
 			"success": false,
-			"error":   err.Error(),
+			"error":   "Failed to subscribe app to webhooks. Check your credentials.",
 		})
 	}
 

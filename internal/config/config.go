@@ -24,9 +24,10 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Name        string `koanf:"name"`
-	Environment string `koanf:"environment"` // development, staging, production
-	Debug       bool   `koanf:"debug"`
+	Name          string `koanf:"name"`
+	Environment   string `koanf:"environment"` // development, staging, production
+	Debug         bool   `koanf:"debug"`
+	EncryptionKey string `koanf:"encryption_key"` // AES-256 key for encrypting secrets at rest
 }
 
 type ChatbotDelayConfig struct {
@@ -36,11 +37,12 @@ type ChatbotDelayConfig struct {
 }
 
 type ServerConfig struct {
-	Host         string `koanf:"host"`
-	Port         int    `koanf:"port"`
-	ReadTimeout  int    `koanf:"read_timeout"`
-	WriteTimeout int    `koanf:"write_timeout"`
-	BasePath     string `koanf:"base_path"` // Base path for frontend (e.g., "/whatomate" for proxy pass)
+	Host           string `koanf:"host"`
+	Port           int    `koanf:"port"`
+	ReadTimeout    int    `koanf:"read_timeout"`
+	WriteTimeout   int    `koanf:"write_timeout"`
+	BasePath       string `koanf:"base_path"`       // Base path for frontend (e.g., "/whatomate" for proxy pass)
+	AllowedOrigins string `koanf:"allowed_origins"`  // Comma-separated list of allowed CORS origins
 }
 
 type DatabaseConfig struct {
@@ -166,7 +168,7 @@ func setDefaults(cfg *Config) {
 		cfg.JWT.AccessExpiryMins = 15
 	}
 	if cfg.JWT.RefreshExpiryDays == 0 {
-		cfg.JWT.RefreshExpiryDays = 7
+		cfg.JWT.RefreshExpiryDays = 1
 	}
 	if cfg.WhatsApp.APIVersion == "" {
 		cfg.WhatsApp.APIVersion = "v18.0"

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -401,6 +402,14 @@ func (a *App) StartCampaign(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Campaign has no pending recipients", nil, "")
 	}
 
+	// Validate template still exists
+	if campaign.TemplateID != uuid.Nil {
+		var template models.Template
+		if err := a.DB.Where("id = ? AND organization_id = ?", campaign.TemplateID, orgID).First(&template).Error; err != nil {
+			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Campaign template no longer exists", nil, "")
+		}
+	}
+
 	// Update status to processing
 	now := time.Now()
 	updates := map[string]interface{}{
@@ -792,16 +801,31 @@ func (a *App) UploadCampaignMedia(r *fastglue.Request) error {
 	}
 	defer func() { _ = file.Close() }()
 
-	// Read file content
-	data, err := io.ReadAll(file)
+	// Read file content (limit to 16MB)
+	const maxMediaSize = 16 << 20 // 16MB
+	data, err := io.ReadAll(io.LimitReader(file, maxMediaSize+1))
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to read file", nil, "")
 	}
+	if len(data) > maxMediaSize {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "File too large. Maximum size is 16MB", nil, "")
+	}
 
-	// Determine mime type from header content type or file extension
+	// Determine and validate MIME type
 	mimeType := fileHeader.Header.Get("Content-Type")
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
+	}
+	allowedMIME := map[string]bool{
+		"image/jpeg": true, "image/png": true, "image/webp": true,
+		"video/mp4": true, "video/3gpp": true,
+		"audio/aac": true, "audio/mp4": true, "audio/mpeg": true, "audio/ogg": true,
+		"application/pdf": true, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+	}
+	if !allowedMIME[mimeType] {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Unsupported file type: "+mimeType, nil, "")
 	}
 
 	// Upload to WhatsApp
@@ -811,7 +835,7 @@ func (a *App) UploadCampaignMedia(r *fastglue.Request) error {
 	mediaID, err := a.WhatsApp.UploadMedia(ctx, waAccount, data, mimeType, fileHeader.Filename)
 	if err != nil {
 		a.Log.Error("Failed to upload media to WhatsApp", "error", err)
-		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to upload media to WhatsApp: "+err.Error(), nil, "")
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to upload media to WhatsApp", nil, "")
 	}
 
 	// Save file locally for preview
@@ -824,7 +848,7 @@ func (a *App) UploadCampaignMedia(r *fastglue.Request) error {
 	// Update campaign with media ID, filename, mime type, and local path
 	updates := map[string]interface{}{
 		"header_media_id":         mediaID,
-		"header_media_filename":   fileHeader.Filename,
+		"header_media_filename":   sanitizeFilename(fileHeader.Filename),
 		"header_media_mime_type":  mimeType,
 		"header_media_local_path": localPath,
 	}
@@ -899,18 +923,24 @@ func (a *App) ServeCampaignMedia(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "No media found", nil, "")
 	}
 
-	// Security: prevent directory traversal
-	filePath := campaign.HeaderMediaLocalPath
-	if strings.Contains(filePath, "..") {
+	// Security: prevent directory traversal and symlink attacks
+	filePath := filepath.Clean(campaign.HeaderMediaLocalPath)
+	baseDir, err := filepath.Abs(a.getMediaStoragePath())
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Storage configuration error", nil, "")
+	}
+	fullPath, err := filepath.Abs(filepath.Join(baseDir, filePath))
+	if err != nil || !strings.HasPrefix(fullPath, baseDir+string(os.PathSeparator)) {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid file path", nil, "")
 	}
 
-	// Build full path
-	fullPath := filepath.Join(a.getMediaStoragePath(), filePath)
-
-	// Check if file exists
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+	// Reject symlinks
+	info, err := os.Lstat(fullPath)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "File not found", nil, "")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid file path", nil, "")
 	}
 
 	// Read file
@@ -1036,5 +1066,23 @@ func (a *App) recalculateCampaignStats(campaignID uuid.UUID) {
 		}).Error; err != nil {
 		a.Log.Error("Failed to recalculate campaign stats", "error", err, "campaign_id", campaignID)
 	}
+}
+
+// sanitizeFilename removes path separators, dangerous characters, and truncates length.
+var safeFilenameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+
+func sanitizeFilename(name string) string {
+	// Strip any path component
+	name = filepath.Base(name)
+	// Replace unsafe characters
+	name = safeFilenameRe.ReplaceAllString(name, "_")
+	// Truncate to 255 chars
+	if len(name) > 255 {
+		name = name[:255]
+	}
+	if name == "" || name == "." || name == ".." {
+		name = "unnamed"
+	}
+	return name
 }
 
