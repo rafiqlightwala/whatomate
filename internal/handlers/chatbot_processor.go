@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"regexp"
 	"strings"
@@ -568,6 +569,8 @@ func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string
 // sendAndSaveTextMessage sends a text message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveTextMessage(account *models.WhatsAppAccount, contact *models.Contact, message string) error {
+	a.applyChatbotReplyDelay()
+
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
 		Account: account,
@@ -606,6 +609,8 @@ func (a *App) sendAndSaveInteractiveButtons(account *models.WhatsAppAccount, con
 		return a.sendAndSaveTextMessage(account, contact, bodyText)
 	}
 
+	a.applyChatbotReplyDelay()
+
 	// Determine interactive type based on button count
 	interactiveType := "button"
 	if len(waButtons) > 3 {
@@ -627,6 +632,8 @@ func (a *App) sendAndSaveInteractiveButtons(account *models.WhatsAppAccount, con
 // sendAndSaveCTAURLButton sends a CTA URL button message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveCTAURLButton(account *models.WhatsAppAccount, contact *models.Contact, bodyText, buttonText, url string) error {
+	a.applyChatbotReplyDelay()
+
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
 		Account:         account,
@@ -643,6 +650,8 @@ func (a *App) sendAndSaveCTAURLButton(account *models.WhatsAppAccount, contact *
 // sendAndSaveFlowMessage sends a WhatsApp Flow message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveFlowMessage(account *models.WhatsAppAccount, contact *models.Contact, flowID, headerText, bodyText, ctaText, flowToken, firstScreen string) error {
+	a.applyChatbotReplyDelay()
+
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
 		Account:         account,
@@ -656,6 +665,38 @@ func (a *App) sendAndSaveFlowMessage(account *models.WhatsAppAccount, contact *m
 		FlowFirstScreen: firstScreen,
 	}, ChatbotSendOptions())
 	return err
+}
+
+func (a *App) applyChatbotReplyDelay() {
+	if a == nil || a.Config == nil || !a.Config.ChatbotDelay.Enabled {
+		return
+	}
+
+	minDelay, maxDelay := chatbotReplyDelayBounds(a.Config.ChatbotDelay.MinSeconds, a.Config.ChatbotDelay.MaxSeconds)
+	if maxDelay < minDelay {
+		maxDelay = minDelay
+	}
+
+	delay := minDelay
+	if maxDelay > minDelay {
+		span := int((maxDelay - minDelay).Seconds())
+		delay += time.Duration(rand.IntN(span+1)) * time.Second
+	}
+
+	if a != nil {
+		a.Log.Debug("Applying chatbot human-like delay", "delay_seconds", int(delay.Seconds()))
+	}
+	time.Sleep(delay)
+}
+
+func chatbotReplyDelayBounds(minSecs, maxSecs int) (time.Duration, time.Duration) {
+	if minSecs <= 0 {
+		minSecs = 60
+	}
+	if maxSecs <= 0 {
+		maxSecs = 120
+	}
+	return time.Duration(minSecs) * time.Second, time.Duration(maxSecs) * time.Second
 }
 
 

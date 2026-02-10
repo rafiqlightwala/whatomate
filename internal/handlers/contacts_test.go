@@ -1683,3 +1683,140 @@ func TestApp_AssignContact_AssignUserFromDifferentOrg(t *testing.T) {
 	// User from a different org should not be found
 	assert.Equal(t, fasthttp.StatusBadRequest, testutil.GetResponseStatusCode(req))
 }
+
+func TestApp_DeleteContactConversation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successfully deletes conversation data and resets contact fields", func(t *testing.T) {
+		app := newTestApp(t)
+		org := testutil.CreateTestOrganization(t, app.DB)
+		adminRole := testutil.CreateAdminRole(t, app.DB, org.ID)
+		user := testutil.CreateTestUser(t, app.DB, org.ID, testutil.WithRoleID(&adminRole.ID))
+		account := testutil.CreateTestWhatsAppAccount(t, app.DB, org.ID)
+		contact := testutil.CreateTestContactWith(t, app.DB, org.ID, testutil.WithContactAccount(account.Name))
+
+		now := time.Now()
+		require.NoError(t, app.DB.Model(contact).Updates(map[string]any{
+			"last_message_at":      &now,
+			"last_message_preview": "hello",
+			"is_read":              false,
+		}).Error)
+
+		msg := &models.Message{
+			BaseModel:       models.BaseModel{ID: uuid.New()},
+			OrganizationID:  org.ID,
+			ContactID:       contact.ID,
+			WhatsAppAccount: account.Name,
+			Direction:       models.DirectionIncoming,
+			MessageType:     models.MessageTypeText,
+			Content:         "test message",
+			Status:          models.MessageStatusReceived,
+		}
+		require.NoError(t, app.DB.Create(msg).Error)
+
+		note := &models.ConversationNote{
+			BaseModel:       models.BaseModel{ID: uuid.New()},
+			OrganizationID:  org.ID,
+			ContactID:       contact.ID,
+			CreatedByID:     user.ID,
+			Content:         "internal note",
+		}
+		require.NoError(t, app.DB.Create(note).Error)
+
+		session := &models.ChatbotSession{
+			BaseModel:       models.BaseModel{ID: uuid.New()},
+			OrganizationID:  org.ID,
+			ContactID:       contact.ID,
+			WhatsAppAccount: account.Name,
+			PhoneNumber:     contact.PhoneNumber,
+			Status:          models.SessionStatusActive,
+			SessionData:     models.JSONB{"k": "v"},
+			StartedAt:       time.Now(),
+			LastActivityAt:  time.Now(),
+		}
+		require.NoError(t, app.DB.Create(session).Error)
+
+		sessionMsg := &models.ChatbotSessionMessage{
+			BaseModel: models.BaseModel{ID: uuid.New()},
+			SessionID: session.ID,
+			Direction: models.DirectionIncoming,
+			Message:   "hello",
+			StepName:  "start",
+		}
+		require.NoError(t, app.DB.Create(sessionMsg).Error)
+
+		transfer := &models.AgentTransfer{
+			BaseModel:        models.BaseModel{ID: uuid.New()},
+			OrganizationID:   org.ID,
+			ContactID:        contact.ID,
+			WhatsAppAccount:  account.Name,
+			PhoneNumber:      contact.PhoneNumber,
+			Status:           models.TransferStatusActive,
+			Source:           models.TransferSourceManual,
+			TransferredAt:    time.Now(),
+		}
+		require.NoError(t, app.DB.Create(transfer).Error)
+
+		req := testutil.NewJSONRequest(t, map[string]any{})
+		testutil.SetAuthContext(req, org.ID, user.ID)
+		testutil.SetPathParam(req, "id", contact.ID.String())
+
+		err := app.DeleteContactConversation(req)
+		require.NoError(t, err)
+		assert.Equal(t, fasthttp.StatusOK, testutil.GetResponseStatusCode(req))
+
+		var messageCount int64
+		require.NoError(t, app.DB.Unscoped().Model(&models.Message{}).
+			Where("organization_id = ? AND contact_id = ?", org.ID, contact.ID).
+			Count(&messageCount).Error)
+		assert.Equal(t, int64(0), messageCount)
+
+		var notesCount int64
+		require.NoError(t, app.DB.Unscoped().Model(&models.ConversationNote{}).
+			Where("organization_id = ? AND contact_id = ?", org.ID, contact.ID).
+			Count(&notesCount).Error)
+		assert.Equal(t, int64(0), notesCount)
+
+		var sessionsCount int64
+		require.NoError(t, app.DB.Unscoped().Model(&models.ChatbotSession{}).
+			Where("organization_id = ? AND contact_id = ?", org.ID, contact.ID).
+			Count(&sessionsCount).Error)
+		assert.Equal(t, int64(0), sessionsCount)
+
+		var sessionMessagesCount int64
+		require.NoError(t, app.DB.Unscoped().Model(&models.ChatbotSessionMessage{}).
+			Where("session_id = ?", session.ID).
+			Count(&sessionMessagesCount).Error)
+		assert.Equal(t, int64(0), sessionMessagesCount)
+
+		var transfersCount int64
+		require.NoError(t, app.DB.Unscoped().Model(&models.AgentTransfer{}).
+			Where("organization_id = ? AND contact_id = ?", org.ID, contact.ID).
+			Count(&transfersCount).Error)
+		assert.Equal(t, int64(0), transfersCount)
+
+		var updatedContact models.Contact
+		require.NoError(t, app.DB.Where("id = ?", contact.ID).First(&updatedContact).Error)
+		assert.Nil(t, updatedContact.LastMessageAt)
+		assert.Equal(t, "", updatedContact.LastMessagePreview)
+		assert.True(t, updatedContact.IsRead)
+		assert.Nil(t, updatedContact.ChatbotLastMessageAt)
+		assert.False(t, updatedContact.ChatbotReminderSent)
+	})
+
+	t.Run("forbidden for users without contacts delete permission", func(t *testing.T) {
+		app := newTestApp(t)
+		org := testutil.CreateTestOrganization(t, app.DB)
+		agentRole := testutil.CreateAgentRole(t, app.DB, org.ID)
+		user := testutil.CreateTestUser(t, app.DB, org.ID, testutil.WithRoleID(&agentRole.ID))
+		contact := testutil.CreateTestContact(t, app.DB, org.ID)
+
+		req := testutil.NewJSONRequest(t, map[string]any{})
+		testutil.SetAuthContext(req, org.ID, user.ID)
+		testutil.SetPathParam(req, "id", contact.ID.String())
+
+		err := app.DeleteContactConversation(req)
+		require.NoError(t, err)
+		assert.Equal(t, fasthttp.StatusForbidden, testutil.GetResponseStatusCode(req))
+	})
+}

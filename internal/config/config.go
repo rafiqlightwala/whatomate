@@ -12,6 +12,7 @@ import (
 // Config holds all configuration for the application
 type Config struct {
 	App           AppConfig           `koanf:"app"`
+	ChatbotDelay  ChatbotDelayConfig  `koanf:"chatbot_delay"`
 	Server        ServerConfig        `koanf:"server"`
 	Database      DatabaseConfig      `koanf:"database"`
 	Redis         RedisConfig         `koanf:"redis"`
@@ -26,6 +27,12 @@ type AppConfig struct {
 	Name        string `koanf:"name"`
 	Environment string `koanf:"environment"` // development, staging, production
 	Debug       bool   `koanf:"debug"`
+}
+
+type ChatbotDelayConfig struct {
+	Enabled    bool `koanf:"enabled"`
+	MinSeconds int  `koanf:"min_seconds"`
+	MaxSeconds int  `koanf:"max_seconds"`
 }
 
 type ServerConfig struct {
@@ -172,6 +179,12 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Storage.LocalPath == "" {
 		cfg.Storage.LocalPath = "./uploads"
+	}
+	if cfg.ChatbotDelay.MinSeconds <= 0 {
+		cfg.ChatbotDelay.MinSeconds = 60
+	}
+	if cfg.ChatbotDelay.MaxSeconds <= 0 {
+		cfg.ChatbotDelay.MaxSeconds = 120
 	}
 	// Default admin credentials (only used during initial setup)
 	if cfg.DefaultAdmin.Email == "" {

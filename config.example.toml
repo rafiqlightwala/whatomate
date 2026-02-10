@@ -9,6 +9,11 @@ name = "Whatomate"
 environment = "development"  # development, staging, production
 debug = true
 
+[chatbot_delay]
+enabled = false
+min_seconds = 60
+max_seconds = 120
+
 [server]
 host = "0.0.0.0"
 port = 8080

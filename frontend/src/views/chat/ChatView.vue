@@ -68,6 +68,7 @@ import {
   UserPlus,
   UserMinus,
   UserX,
+  Trash2,
   Play,
   Reply,
   X,
@@ -93,7 +94,7 @@ import CannedResponsePicker from '@/components/chat/CannedResponsePicker.vue'
 import ContactInfoPanel from '@/components/chat/ContactInfoPanel.vue'
 import ConversationNotes from '@/components/chat/ConversationNotes.vue'
 import { useNotesStore } from '@/stores/notes'
-import { CreateContactDialog } from '@/components/shared'
+import { CreateContactDialog, DeleteConfirmDialog } from '@/components/shared'
 import { Info } from 'lucide-vue-next'
 
 const { t } = useI18n()
@@ -108,6 +109,7 @@ const notesStore = useNotesStore()
 const { isDark } = useColorMode()
 
 const canWriteContacts = authStore.hasPermission('contacts', 'write')
+const canDeleteContacts = authStore.hasPermission('contacts', 'delete')
 
 const messageInput = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
@@ -118,6 +120,8 @@ const isTransferring = ref(false)
 const isResuming = ref(false)
 const isInfoPanelOpen = ref(false)
 const isNotesPanelOpen = ref(false)
+const isClearConversationDialogOpen = ref(false)
+const isClearingConversation = ref(false)
 const contactSessionData = ref<any>(null)
 
 // File upload state
@@ -769,6 +773,38 @@ async function resumeChatbot() {
     toast.error(message)
   } finally {
     isResuming.value = false
+  }
+}
+
+async function clearConversationHistory() {
+  if (!contactsStore.currentContact || isClearingConversation.value) return
+
+  isClearingConversation.value = true
+  try {
+    const contactIdToClear = contactsStore.currentContact.id
+    await contactsService.deleteConversation(contactIdToClear)
+
+    contactsStore.clearMessages()
+    notesStore.clearNotes()
+
+    if (contactsStore.currentContact?.id === contactIdToClear) {
+      contactsStore.currentContact = {
+        ...contactsStore.currentContact,
+        last_message_at: undefined,
+        unread_count: 0
+      }
+    }
+
+    await contactsStore.fetchContacts()
+    await contactsStore.fetchMessages(contactIdToClear)
+
+    toast.success(t('chat.clearConversationSuccess'))
+  } catch (error: any) {
+    const message = error.response?.data?.message || t('chat.clearConversationFailed')
+    toast.error(message)
+  } finally {
+    isClearingConversation.value = false
+    isClearConversationDialogOpen.value = false
   }
 }
 
@@ -1424,6 +1460,21 @@ async function sendMediaMessage() {
               </TooltipTrigger>
               <TooltipContent>{{ $t('chat.internalNotes') }}</TooltipContent>
             </Tooltip>
+            <Tooltip v-if="canDeleteContacts">
+              <TooltipTrigger as-child>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-8 w-8 text-red-400/70 hover:text-red-300 hover:bg-red-500/10 light:text-red-600 light:hover:text-red-700 light:hover:bg-red-50"
+                  :disabled="isClearingConversation"
+                  @click="isClearConversationDialogOpen = true"
+                >
+                  <Loader2 v-if="isClearingConversation" class="h-4 w-4 animate-spin" />
+                  <Trash2 v-else class="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{{ $t('chat.clearConversation') }}</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger as-child>
                 <Button
@@ -1462,6 +1513,14 @@ async function sendMediaMessage() {
                 <DropdownMenuItem @click="isInfoPanelOpen = !isInfoPanelOpen">
                   <Info class="mr-2 h-4 w-4" />
                   <span>{{ isInfoPanelOpen ? $t('chat.hideContactDetails') : $t('chat.viewContactDetails') }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="canDeleteContacts"
+                  class="text-red-500 focus:text-red-500"
+                  @click="isClearConversationDialogOpen = true"
+                >
+                  <Trash2 class="mr-2 h-4 w-4" />
+                  <span>{{ $t('chat.clearConversation') }}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1930,6 +1989,15 @@ async function sendMediaMessage() {
       :session-data="contactSessionData"
       @close="isInfoPanelOpen = false"
       @tags-updated="(tags) => contactsStore.updateContactTags(contactsStore.currentContact!.id, tags)"
+    />
+
+    <DeleteConfirmDialog
+      v-model:open="isClearConversationDialogOpen"
+      :title="$t('chat.clearConversation')"
+      :description="$t('chat.clearConversationDesc')"
+      :confirm-label="isClearingConversation ? $t('common.loading') : $t('chat.clearConversationConfirm')"
+      :cancel-label="$t('common.cancel')"
+      @confirm="clearConversationHistory"
     />
 
     <!-- Assign Contact Dialog -->

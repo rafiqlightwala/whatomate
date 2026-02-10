@@ -370,7 +370,12 @@
     "noteUpdateFailed": "Failed to update note",
     "noteDeleted": "Note deleted",
     "noteDeleteFailed": "Failed to delete note",
-    "confirmDeleteNote": "Are you sure you want to delete this note?"
+    "confirmDeleteNote": "Are you sure you want to delete this note?",
+    "clearConversation": "Clear Conversation",
+    "clearConversationDesc": "Delete all messages, notes, chatbot sessions, and transfer history for this contact. This cannot be undone.",
+    "clearConversationConfirm": "Delete Everything",
+    "clearConversationSuccess": "Conversation history cleared",
+    "clearConversationFailed": "Failed to clear conversation history"
   },
   "contacts": {
     "title": "Contacts",

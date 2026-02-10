@@ -19,6 +19,7 @@ import (
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
+	"gorm.io/gorm"
 )
 
 // ContactResponse represents a contact with additional fields for the frontend
@@ -1449,6 +1450,100 @@ func (a *App) DeleteContact(r *fastglue.Request) error {
 
 	return r.SendEnvelope(map[string]any{
 		"message": "Contact deleted successfully",
+	})
+}
+
+// DeleteContactConversation permanently deletes all conversation data for a contact.
+// This includes messages, notes, chatbot sessions, session messages, and agent transfer history.
+func (a *App) DeleteContactConversation(r *fastglue.Request) error {
+	orgID, userID, err := a.getOrgAndUserID(r)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
+	}
+
+	if !a.HasPermission(userID, models.ResourceContacts, models.ActionDelete, orgID) {
+		return r.SendErrorEnvelope(fasthttp.StatusForbidden, "You do not have permission to clear conversation history", nil, "")
+	}
+
+	contactID, err := parsePathUUID(r, "id", "contact")
+	if err != nil {
+		return nil
+	}
+
+	contact, err := findByIDAndOrg[models.Contact](a.DB, r, contactID, orgID, "Contact")
+	if err != nil {
+		return nil
+	}
+
+	deletedCounts := map[string]int64{
+		"messages":         0,
+		"notes":            0,
+		"sessions":         0,
+		"session_messages": 0,
+		"transfers":        0,
+	}
+
+	if err := a.DB.Transaction(func(tx *gorm.DB) error {
+		// Delete session messages first to avoid FK issues.
+		sessionSubquery := tx.Model(&models.ChatbotSession{}).
+			Select("id").
+			Where("organization_id = ? AND contact_id = ?", orgID, contactID)
+
+		result := tx.Unscoped().
+			Where("session_id IN (?)", sessionSubquery).
+			Delete(&models.ChatbotSessionMessage{})
+		if result.Error != nil {
+			return result.Error
+		}
+		deletedCounts["session_messages"] = result.RowsAffected
+
+		result = tx.Unscoped().
+			Where("organization_id = ? AND contact_id = ?", orgID, contactID).
+			Delete(&models.ChatbotSession{})
+		if result.Error != nil {
+			return result.Error
+		}
+		deletedCounts["sessions"] = result.RowsAffected
+
+		result = tx.Unscoped().
+			Where("organization_id = ? AND contact_id = ?", orgID, contactID).
+			Delete(&models.ConversationNote{})
+		if result.Error != nil {
+			return result.Error
+		}
+		deletedCounts["notes"] = result.RowsAffected
+
+		result = tx.Unscoped().
+			Where("organization_id = ? AND contact_id = ?", orgID, contactID).
+			Delete(&models.AgentTransfer{})
+		if result.Error != nil {
+			return result.Error
+		}
+		deletedCounts["transfers"] = result.RowsAffected
+
+		result = tx.Unscoped().
+			Where("organization_id = ? AND contact_id = ?", orgID, contactID).
+			Delete(&models.Message{})
+		if result.Error != nil {
+			return result.Error
+		}
+		deletedCounts["messages"] = result.RowsAffected
+
+		return tx.Model(contact).Updates(map[string]any{
+			"last_message_at":         nil,
+			"last_message_preview":    "",
+			"is_read":                 true,
+			"chatbot_last_message_at": nil,
+			"chatbot_reminder_sent":   false,
+		}).Error
+	}); err != nil {
+		a.Log.Error("Failed to clear contact conversation", "error", err, "contact_id", contactID, "organization_id", orgID)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to clear conversation history", nil, "")
+	}
+
+	return r.SendEnvelope(map[string]any{
+		"message":        "Conversation history deleted successfully",
+		"deleted_counts": deletedCounts,
 	})
 }
 
