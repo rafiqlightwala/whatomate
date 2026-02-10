@@ -1,159 +1,123 @@
 {
   "responses": [
     {
-      "keywords": ["(info|information|infi)"],
-      "reply_id": "more_information",
-      "language": "en",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(معلومات|malumat|maloomat|malomat)"],
-      "reply_id": "more_information",
-      "language": "ur",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(broker|brokar)"],
-      "reply_id": "broker_information",
-      "language": "en",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(بروکر)"],
-      "reply_id": "broker_information",
-      "language": "ur",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(deposit|withdraw|trade|trading)"],
-      "reply_id": "not_for_trading",
-      "language": "ur",
-      "delay_range": { "min": 60, "max": 70 }
-    },
-    {
-      "keywords": ["\\b(invest|investment)\\b"],
-      "reply_id": "not_for_trading",
-      "language": "ur",
-      "delay_range": { "min": 60, "max": 70 }
-    },
-    {
-      "keywords": ["(buy|purchase)", "(stock|share)"],
-      "reply_id": "not_for_trading",
-      "language": "ur",
-      "delay_range": { "min": 60, "max": 70 }
-    },
-    {
-      "keywords": ["(forgot|forget|reset|forgt|change)", "(password|pwd|pass)"],
-      "reply_id": "reset_password",
-      "language": "en",
-      "delay_range": { "min": 60, "max": 70 }
-    },
-    {
-      "keywords": ["(بھول|ریسیٹ|bhool)", "(پاسورڈ|پاس ورڈ|pasword|password)"],
-      "reply_id": "reset_password",
-      "language": "ur",
-      "delay_range": { "min": 60, "max": 70 }
-    },
-    {
-      "keywords": ["(having)", "(issue)"],
-      "reply_id": "account_creation",
-      "language": "ur",
-      "delay_range": { "min": 60, "max": 70 }
-    },
-    {
-      "keywords": ["\\b(hi|hello)\\b"],
+      "keywords": ["\\b(hi|hello|hey|salam|assalam\\s*o\\s*alaikum)\\b"],
       "reply_id": "greeting",
       "language": "en",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(more|one|multiple|two|another)", "(portfolio)"],
-      "reply_id": "multiple_portfolio",
-      "language": "en",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(create)", "(account)"],
-      "reply_id": "account_creation",
-      "language": "en",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(اکاؤنٹ)", "(بنائیں|بناؤ)"],
-      "reply_id": "account_creation",
+      "keywords": ["(السلام\\s*علیکم|ہیلو|سلام)"],
+      "reply_id": "greeting",
       "language": "ur",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(portfolio|watchlist)", "(load|loading)"],
-      "reply_id": "loading_issues",
-      "language": "en",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(subscription|google|apple)"],
-      "reply_id": "subscription_payment",
-      "language": "en",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(ad\\s*block(er)?|adblock(er)?|ad\\s*guard|adguard|private\\s*dns|dns\\s*filter|nextdns|blokada|pi-?hole|1\\.1\\.1\\.1)"],
-      "reply_id": "adblock_private_dns",
-      "language": "en",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(ایڈ\\s*بلاک|ایڈبلاک|پرائیویٹ\\s*dns|پرائیویٹ\\s*ڈی\\s*این\\s*ایس|ڈی\\s*این\\s*ایس)"],
-      "reply_id": "adblock_private_dns",
-      "language": "ur",
-      "delay_range": { "min": 10, "max": 20 }
-    },
-    {
-      "keywords": ["(infor|informtion|information\\s*please|more\\s*info)"],
+      "keywords": ["(info|information|details|about\\s*investify|what\\s*is\\s*investify|infi|infor|informtion|more\\s*info)"],
       "reply_id": "more_information",
       "language": "en",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(broker\\s*list|brokers|brocker|psx\\s*broker)"],
+      "keywords": ["(معلومات|تفصیل|انفارمیشن|malumat|maloomat|malomat)"],
+      "reply_id": "more_information",
+      "language": "ur",
+      "delay_range": { "min": 10, "max": 20 }
+    },
+    {
+      "keywords": ["(broker|brokar|brocker|brokers|broker\\s*list|psx\\s*broker|trec)"],
       "reply_id": "broker_information",
       "language": "en",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(forgot\\s*password|passwrod|paswrd|forgot\\s*pwd|reset\\s*pwd)"],
+      "keywords": ["(بروکر|بروکرز|broker)"],
+      "reply_id": "broker_information",
+      "language": "ur",
+      "delay_range": { "min": 10, "max": 20 }
+    },
+    {
+      "keywords": ["(deposit|withdraw|withdrawal|buy|sell|purchase|trade|trading|real\\s*trading|live\\s*trading|cash\\s*deposit|cash\\s*withdraw)"],
+      "reply_id": "not_for_trading",
+      "language": "en",
+      "delay_range": { "min": 60, "max": 70 }
+    },
+    {
+      "keywords": ["(ٹریڈ|ٹریڈنگ|خرید|فروخت|ڈپازٹ|جمع|withdraw|deposit|trade|trading)"],
+      "reply_id": "not_for_trading",
+      "language": "ur",
+      "delay_range": { "min": 60, "max": 70 }
+    },
+    {
+      "keywords": ["(forgot|forget|reset|change|recover|forgt)", "(password|pass\\s*word|pwd|pasw?ord)"],
       "reply_id": "reset_password",
       "language": "en",
       "delay_range": { "min": 60, "max": 70 }
     },
     {
-      "keywords": ["(sign\\s*up|signup|register)", "(account)"],
+      "keywords": ["(بھول|بھول\\s*گئے|ریسیٹ|تبدیل|reset)", "(پاسورڈ|پاس\\s*ورڈ|password|pasword)"],
+      "reply_id": "reset_password",
+      "language": "ur",
+      "delay_range": { "min": 60, "max": 70 }
+    },
+    {
+      "keywords": ["(create\\s*(an\\s*)?account|open\\s*account|new\\s*account|account\\s*create|sign\\s*up|signup|register|registration|how\\s*to\\s*create\\s*account|creat\\s*account|make\\s*account)"],
       "reply_id": "account_creation",
       "language": "en",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(watch\\s*list|watchlist|portfolio)", "(not\\s*load(ing)?|stuck|issue|problem)"],
+      "keywords": ["(اکاؤنٹ|account)", "(بنائیں|بنانا|بناؤ|رجسٹر|create|signup|sign\\s*up|register)"],
+      "reply_id": "account_creation",
+      "language": "ur",
+      "delay_range": { "min": 10, "max": 20 }
+    },
+    {
+      "keywords": ["(multiple\\s*portfolio(s)?|more\\s*than\\s*one\\s*portfolio|another\\s*portfolio|second\\s*portfolio|two\\s*portfolio(s)?|2\\s*portfolio(s)?|many\\s*portfolio(s)?|add\\s*(another\\s*)?portfolio)"],
+      "reply_id": "multiple_portfolio",
+      "language": "en",
+      "delay_range": { "min": 10, "max": 20 }
+    },
+    {
+      "keywords": ["(ایک\\s*سے\\s*زیادہ\\s*پورٹ\\s*فولیو|مزید\\s*پورٹ\\s*فولیو|دوسرا\\s*پورٹ\\s*فولیو|متعدد\\s*پورٹ\\s*فولیو|another\\s*portfolio|multiple\\s*portfolio)"],
+      "reply_id": "multiple_portfolio",
+      "language": "ur",
+      "delay_range": { "min": 10, "max": 20 }
+    },
+    {
+      "keywords": ["(watch\\s*list|watchlist|portfolio)", "(not\\s*load(ing)?|load\\s*issue|loading\\s*issue|stuck|problem|issue|not\\s*show(ing)?|empty|not\\s*open(ing)?)"],
       "reply_id": "loading_issues",
       "language": "en",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(subscription|subcription|payment|pay|card|easypaisa|easy\\s*paisa|play\\s*store|app\\s*store)"],
+      "keywords": ["(واچ\\s*لسٹ|پورٹ\\s*فولیو|watchlist|portfolio)", "(لوڈ\\s*نہیں|لوڈ\\s*نهيں|مسئلہ|problem|issue|نہیں\\s*آرہا|show\\s*نہیں)"],
+      "reply_id": "loading_issues",
+      "language": "ur",
+      "delay_range": { "min": 10, "max": 20 }
+    },
+    {
+      "keywords": ["(subscription|subcription|payment|pay|card|debit\\s*card|easypaisa|easy\\s*paisa|jazzcash|nayapay|sadapay|play\\s*store|app\\s*store|apple\\s*store|google\\s*play)"],
       "reply_id": "subscription_payment",
       "language": "en",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(ad\\s*blocking|ad\\s*block\\s*message|ad\\s*blocked|blocking\\s*message)"],
+      "keywords": ["(سبسکرپشن|ادائیگی|payment|card|play\\s*store|app\\s*store|easypaisa|jazzcash)"],
+      "reply_id": "subscription_payment",
+      "language": "ur",
+      "delay_range": { "min": 10, "max": 20 }
+    },
+    {
+      "keywords": ["(ad\\s*block(er|ing)?|adblock(er|ing)?|ad\\s*guard|adguard|private\\s*dns|dns\\s*filter|nextdns|blokada|pi-?hole|1\\.1\\.1\\.1|anti\\s*ad\\s*block(ing)?|ad\\s*blocking\\s*message)"],
       "reply_id": "adblock_private_dns",
       "language": "en",
       "delay_range": { "min": 10, "max": 20 }
     },
     {
-      "keywords": ["(create\\s*account|create\\s*an\\s*account|open\\s*account|new\\s*account|account\\s*create|sign\\s*up|signup|register\\s*account|creat\\s*account)"],
-      "reply_id": "account_creation",
-      "language": "en",
+      "keywords": ["(ایڈ\\s*بلاک|ایڈبلاک|پرائیویٹ\\s*dns|پرائیویٹ\\s*ڈی\\s*این\\s*ایس|ڈی\\s*این\\s*ایس|adblock|adguard|nextdns)"],
+      "reply_id": "adblock_private_dns",
+      "language": "ur",
       "delay_range": { "min": 10, "max": 20 }
     }
   ]

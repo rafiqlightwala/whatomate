@@ -14,6 +14,9 @@ var investifyKeywordsRaw []byte
 //go:embed ListOfBrokersPSX.pdf
 var listOfBrokersPSXPDFRaw []byte
 
+//go:embed investify_ai_context_en.md
+var investifyAIContextENRaw []byte
+
 type InvestifyReplies map[string]map[string]string
 
 type DelayRange struct {
@@ -50,4 +53,8 @@ func LoadInvestifyKeywordEntries() ([]KeywordEntry, error) {
 
 func LoadBrokersPDF() ([]byte, string) {
 	return listOfBrokersPSXPDFRaw, "ListOfBrokersPSX.pdf"
+}
+
+func LoadInvestifyAIContextSummary() string {
+	return string(investifyAIContextENRaw)
 }

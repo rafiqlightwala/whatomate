@@ -11,7 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const investifyBuiltinVersion = "builtin:investify:keywords:v1"
+const investifyBuiltinVersion = "builtin:investify:keywords:v2"
+const investifyBuiltinPriorityBase = 2000
+const investifySeedGreetingMessage = "Thank you for contacting the Investify App Support Team. How can we assist you today?\nانویسٹیفائی ایپ سپورٹ ٹیم سے رابطہ کرنے کا شکریہ۔ ہم آپ کی کس طرح مدد کر سکتے ہیں؟"
+const investifySeedAIContextName = "Investify Support FAQ (Built-in)"
 
 // SeedBuiltinInvestifyForAllOrganizations ensures builtin Investify keyword rules
 // exist for every organization. It is safe to run on every startup.
@@ -25,8 +28,16 @@ func (a *App) SeedBuiltinInvestifyForAllOrganizations() error {
 		if _, err := a.seedBuiltinInvestifyKeywordRules(a.DB, org.ID); err != nil {
 			return fmt.Errorf("seed org %s: %w", org.ID, err)
 		}
+		if err := a.seedBuiltinGreetingMessage(a.DB, org.ID); err != nil {
+			return fmt.Errorf("seed org %s greeting: %w", org.ID, err)
+		}
+		if err := a.seedBuiltinInvestifyAIContext(a.DB, org.ID); err != nil {
+			return fmt.Errorf("seed org %s ai context: %w", org.ID, err)
+		}
 		// Ensure runtime uses freshly seeded rules and not stale Redis cache.
 		a.InvalidateKeywordRulesCache(org.ID)
+		a.InvalidateChatbotSettingsCache(org.ID)
+		a.InvalidateAIContextsCache(org.ID)
 	}
 	return nil
 }
@@ -42,8 +53,16 @@ func (a *App) SeedBuiltinInvestifyForOrganization(tx *gorm.DB, orgID uuid.UUID) 
 	if err != nil {
 		return err
 	}
+	if err := a.seedBuiltinGreetingMessage(db, orgID); err != nil {
+		return err
+	}
+	if err := a.seedBuiltinInvestifyAIContext(db, orgID); err != nil {
+		return err
+	}
 	// If called outside request flow, keep cache consistent.
 	a.InvalidateKeywordRulesCache(orgID)
+	a.InvalidateChatbotSettingsCache(orgID)
+	a.InvalidateAIContextsCache(orgID)
 	return nil
 }
 
@@ -81,7 +100,7 @@ func (a *App) seedBuiltinInvestifyKeywordRules(db *gorm.DB, orgID uuid.UUID) (in
 			WhatsAppAccount: "",
 			Name:            fmt.Sprintf("Investify %s (%s) #%d", strings.ReplaceAll(entry.ReplyID, "_", " "), entry.Language, idx+1),
 			IsEnabled:       true,
-			Priority:        1000 - idx,
+			Priority:        investifyBuiltinPriorityBase - idx,
 			Keywords:        []string{compiledKeyword},
 			MatchType:       models.MatchTypeRegex,
 			CaseSensitive:   false,
@@ -118,18 +137,131 @@ func (a *App) seedBuiltinInvestifyKeywordRules(db *gorm.DB, orgID uuid.UUID) (in
 }
 
 func compileKeywordPattern(keywords []string) string {
-	if len(keywords) == 0 {
-		return ""
-	}
-	if len(keywords) == 1 {
-		return "(?i)" + keywords[0]
+	cleaned := make([]string, 0, len(keywords))
+	for _, kw := range keywords {
+		trimmed := strings.TrimSpace(kw)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
 	}
 
-	parts := make([]string, 0, len(keywords)+2)
-	parts = append(parts, "(?is)")
-	for _, kw := range keywords {
-		parts = append(parts, "(?=.*"+kw+")")
+	if len(cleaned) == 0 {
+		return ""
 	}
-	parts = append(parts, ".*")
-	return strings.Join(parts, "")
+	if len(cleaned) == 1 {
+		return "(?i)" + cleaned[0]
+	}
+
+	// Go's regexp engine (RE2) doesn't support lookaheads. Build an
+	// order-insensitive AND pattern by matching every keyword permutation.
+	perms := keywordPermutations(cleaned)
+	orderPatterns := make([]string, 0, len(perms))
+	for _, perm := range perms {
+		var b strings.Builder
+		b.WriteString("(?s).*")
+		for _, kw := range perm {
+			b.WriteString("(")
+			b.WriteString(kw)
+			b.WriteString(").*")
+		}
+		orderPatterns = append(orderPatterns, b.String())
+	}
+
+	return "(?i)(?:" + strings.Join(orderPatterns, "|") + ")"
+}
+
+func keywordPermutations(items []string) [][]string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	used := make([]bool, len(items))
+	current := make([]string, 0, len(items))
+	perms := make([][]string, 0)
+
+	var build func()
+	build = func() {
+		if len(current) == len(items) {
+			perm := append([]string(nil), current...)
+			perms = append(perms, perm)
+			return
+		}
+		for i := range items {
+			if used[i] {
+				continue
+			}
+			used[i] = true
+			current = append(current, items[i])
+			build()
+			current = current[:len(current)-1]
+			used[i] = false
+		}
+	}
+	build()
+
+	return perms
+}
+
+func (a *App) seedBuiltinGreetingMessage(db *gorm.DB, orgID uuid.UUID) error {
+	var settings models.ChatbotSettings
+	err := db.Where("organization_id = ? AND whats_app_account = ''", orgID).First(&settings).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		settings = models.ChatbotSettings{
+			BaseModel:          models.BaseModel{ID: uuid.New()},
+			OrganizationID:     orgID,
+			WhatsAppAccount:    "",
+			IsEnabled:          false,
+			SessionTimeoutMins: 30,
+		}
+		if err := db.Create(&settings).Error; err != nil {
+			return err
+		}
+	}
+
+	if strings.TrimSpace(settings.DefaultResponse) == "" {
+		return db.Model(&settings).Update("default_response", investifySeedGreetingMessage).Error
+	}
+	return nil
+}
+
+func (a *App) seedBuiltinInvestifyAIContext(db *gorm.DB, orgID uuid.UUID) error {
+	staticContent := strings.TrimSpace(builtin.LoadInvestifyAIContextSummary())
+	if staticContent == "" {
+		return nil
+	}
+
+	updateFields := map[string]interface{}{
+		"is_enabled":       true,
+		"priority":         900,
+		"context_type":     models.ContextTypeStatic,
+		"trigger_keywords": models.StringArray{},
+		"static_content":   staticContent,
+	}
+
+	var existing models.AIContext
+	err := db.Where("organization_id = ? AND whats_app_account = '' AND name = ?", orgID, investifySeedAIContextName).
+		First(&existing).Error
+	if err == nil {
+		// Always refresh builtin AI context on startup/build.
+		return db.Model(&existing).Updates(updateFields).Error
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	aiCtx := models.AIContext{
+		BaseModel:       models.BaseModel{ID: uuid.New()},
+		OrganizationID:  orgID,
+		WhatsAppAccount: "",
+		Name:            investifySeedAIContextName,
+		IsEnabled:       true,
+		Priority:        900,
+		ContextType:     models.ContextTypeStatic,
+		TriggerKeywords: models.StringArray{},
+		StaticContent:   staticContent,
+	}
+	return db.Create(&aiCtx).Error
 }

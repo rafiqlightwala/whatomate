@@ -366,6 +366,15 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		return
 	}
 
+	if keywordMatched && keywordResponse.ResponseType != models.ResponseTypeTransfer &&
+		a.isKeywordAlreadyTriggeredInSession(session, keywordResponse) {
+		a.Log.Info("Keyword already triggered in current session, skipping keyword response",
+			"rule_id", keywordResponse.RuleID,
+			"reply_id", keywordResponse.ReplyID,
+			"contact", contact.PhoneNumber)
+		keywordMatched = false
+	}
+
 	// Handle non-transfer keyword matches before flow triggers/greeting/AI.
 	// This ensures deterministic keyword behavior and avoids AI taking over
 	// when a keyword rule is intended to respond.
@@ -388,6 +397,7 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 				a.Log.Error("Failed to send broker PDF", "error", err, "contact", contact.PhoneNumber)
 			}
 		}
+		a.markKeywordTriggeredInSession(session, keywordResponse)
 		return
 	}
 
@@ -491,7 +501,13 @@ type KeywordResponse struct {
 	DelayMinSec  int
 	DelayMaxSec  int
 	ReplyID      string
+	RuleID       string
 }
+
+var (
+	arabicScriptPattern = regexp.MustCompile(`\p{Arabic}`)
+	latinTokenPattern   = regexp.MustCompile(`[A-Za-z][A-Za-z0-9@:/._+\-()%#?=&]*`)
+)
 
 // matchKeywordRules checks if the message matches any keyword rules
 func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string) (*KeywordResponse, bool) {
@@ -536,6 +552,13 @@ func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string
 				re, err := regexp.Compile(pattern)
 				if err == nil {
 					matched = re.MatchString(messageText)
+				} else if strings.Contains(pattern, "(?=.*") {
+					// Backward compatibility for legacy seeded patterns that used
+					// lookaheads (unsupported by Go regexp). Treat each lookahead
+					// term as an AND condition.
+					matched = matchLegacyLookaheadRegex(pattern, messageText)
+				} else {
+					a.Log.Warn("Skipping invalid keyword regex pattern", "pattern", pattern, "error", err)
 				}
 			default:
 				// Default to contains
@@ -545,6 +568,7 @@ func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string
 			if matched {
 				response := &KeywordResponse{
 					ResponseType: rule.ResponseType,
+					RuleID:       rule.ID.String(),
 				}
 
 				// For transfer type, use body as the transfer message
@@ -595,6 +619,208 @@ func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string
 	return nil, false
 }
 
+func matchLegacyLookaheadRegex(pattern, message string) bool {
+	terms := extractLegacyLookaheadTerms(pattern)
+	if len(terms) == 0 {
+		return false
+	}
+
+	flagPrefix := legacyInlineFlagPrefix(pattern)
+	for _, term := range terms {
+		termPattern := term
+		if flagPrefix != "" {
+			termPattern = flagPrefix + termPattern
+		}
+		re, err := regexp.Compile(termPattern)
+		if err != nil {
+			return false
+		}
+		if !re.MatchString(message) {
+			return false
+		}
+	}
+	return true
+}
+
+func legacyInlineFlagPrefix(pattern string) string {
+	hasI := strings.Contains(pattern, "(?i)") || strings.Contains(pattern, "(?is)") || strings.Contains(pattern, "(?si)")
+	hasS := strings.Contains(pattern, "(?s)") || strings.Contains(pattern, "(?is)") || strings.Contains(pattern, "(?si)")
+	flags := ""
+	if hasI {
+		flags += "i"
+	}
+	if hasS {
+		flags += "s"
+	}
+	if flags == "" {
+		return ""
+	}
+	return "(?" + flags + ")"
+}
+
+func extractLegacyLookaheadTerms(pattern string) []string {
+	const marker = "(?=.*"
+	terms := make([]string, 0, 4)
+	cursor := 0
+
+	for cursor < len(pattern) {
+		relIdx := strings.Index(pattern[cursor:], marker)
+		if relIdx < 0 {
+			break
+		}
+
+		start := cursor + relIdx + len(marker)
+		i := start
+		depth := 0
+		escaped := false
+		found := false
+
+		for i < len(pattern) {
+			ch := pattern[i]
+			if escaped {
+				escaped = false
+				i++
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				i++
+				continue
+			}
+			if ch == '(' {
+				depth++
+				i++
+				continue
+			}
+			if ch == ')' {
+				if depth == 0 {
+					term := strings.TrimSpace(pattern[start:i])
+					if term != "" {
+						terms = append(terms, term)
+					}
+					cursor = i + 1
+					found = true
+					break
+				}
+				depth--
+				i++
+				continue
+			}
+			i++
+		}
+
+		if !found {
+			break
+		}
+	}
+
+	return terms
+}
+
+func keywordSessionHitKey(response *KeywordResponse) string {
+	if response == nil {
+		return ""
+	}
+	if response.ReplyID != "" {
+		return "reply:" + strings.TrimSpace(response.ReplyID)
+	}
+	if response.RuleID != "" {
+		return "rule:" + strings.TrimSpace(response.RuleID)
+	}
+	body := strings.TrimSpace(strings.ToLower(response.Body))
+	if body == "" {
+		return ""
+	}
+	return "body:" + body
+}
+
+func getSessionKeywordHitSet(session *models.ChatbotSession) map[string]struct{} {
+	hits := make(map[string]struct{})
+	if session == nil || session.SessionData == nil {
+		return hits
+	}
+
+	raw, ok := session.SessionData["triggered_keyword_hits"]
+	if !ok || raw == nil {
+		return hits
+	}
+
+	switch v := raw.(type) {
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					hits[s] = struct{}{}
+				}
+			}
+		}
+	case []string:
+		for _, s := range v {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				hits[s] = struct{}{}
+			}
+		}
+	}
+
+	return hits
+}
+
+func (a *App) isKeywordAlreadyTriggeredInSession(session *models.ChatbotSession, response *KeywordResponse) bool {
+	key := keywordSessionHitKey(response)
+	if key == "" {
+		return false
+	}
+	_, exists := getSessionKeywordHitSet(session)[key]
+	return exists
+}
+
+func (a *App) markKeywordTriggeredInSession(session *models.ChatbotSession, response *KeywordResponse) {
+	key := keywordSessionHitKey(response)
+	if key == "" || session == nil {
+		return
+	}
+	if session.SessionData == nil {
+		session.SessionData = models.JSONB{}
+	}
+
+	hitSet := getSessionKeywordHitSet(session)
+	if _, exists := hitSet[key]; exists {
+		return
+	}
+	hitSet[key] = struct{}{}
+
+	serialized := make([]string, 0, len(hitSet))
+	for k := range hitSet {
+		serialized = append(serialized, k)
+	}
+
+	session.SessionData["triggered_keyword_hits"] = serialized
+	a.DB.Model(session).Update("session_data", session.SessionData)
+}
+
+// normalizeMixedDirectionText isolates LTR tokens inside RTL text to prevent
+// broken visual ordering in chat clients when Urdu/Arabic and English are mixed.
+func normalizeMixedDirectionText(text string) string {
+	if text == "" {
+		return text
+	}
+	if !arabicScriptPattern.MatchString(text) || !latinTokenPattern.MatchString(text) {
+		return text
+	}
+
+	const lri = "\u2066" // Left-to-Right Isolate
+	const pdi = "\u2069" // Pop Directional Isolate
+
+	return latinTokenPattern.ReplaceAllStringFunc(text, func(token string) string {
+		if strings.Contains(token, lri) || strings.Contains(token, pdi) {
+			return token
+		}
+		return lri + token + pdi
+	})
+}
+
 // sendAndSaveTextMessage sends a text message and saves it to the database
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveTextMessage(account *models.WhatsAppAccount, contact *models.Contact, message string) error {
@@ -612,6 +838,7 @@ func (a *App) sendAndSaveTextMessageWithDelayRange(account *models.WhatsAppAccou
 }
 
 func (a *App) sendAndSaveTextMessageRaw(account *models.WhatsAppAccount, contact *models.Contact, message string) error {
+	message = normalizeMixedDirectionText(message)
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
 		Account: account,
@@ -639,6 +866,7 @@ func (a *App) sendAndSaveInteractiveButtonsWithDelayRange(account *models.WhatsA
 }
 
 func (a *App) sendAndSaveInteractiveButtonsRaw(account *models.WhatsAppAccount, contact *models.Contact, bodyText string, buttons []map[string]interface{}) error {
+	bodyText = normalizeMixedDirectionText(bodyText)
 	// Convert buttons to whatsapp.Button format
 	waButtons := make([]whatsapp.Button, 0, len(buttons))
 	for i, btn := range buttons {
@@ -653,6 +881,7 @@ func (a *App) sendAndSaveInteractiveButtonsRaw(account *models.WhatsAppAccount, 
 		if buttonTitle == "" {
 			continue
 		}
+		buttonTitle = normalizeMixedDirectionText(buttonTitle)
 		waButtons = append(waButtons, whatsapp.Button{
 			ID:    buttonID,
 			Title: buttonTitle,
@@ -686,6 +915,8 @@ func (a *App) sendAndSaveInteractiveButtonsRaw(account *models.WhatsAppAccount, 
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveCTAURLButton(account *models.WhatsAppAccount, contact *models.Contact, bodyText, buttonText, url string) error {
 	a.applyChatbotReplyDelayForContact(account, contact)
+	bodyText = normalizeMixedDirectionText(bodyText)
+	buttonText = normalizeMixedDirectionText(buttonText)
 
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
@@ -704,6 +935,9 @@ func (a *App) sendAndSaveCTAURLButton(account *models.WhatsAppAccount, contact *
 // Uses the unified SendOutgoingMessage for consistent behavior
 func (a *App) sendAndSaveFlowMessage(account *models.WhatsAppAccount, contact *models.Contact, flowID, headerText, bodyText, ctaText, flowToken, firstScreen string) error {
 	a.applyChatbotReplyDelayForContact(account, contact)
+	headerText = normalizeMixedDirectionText(headerText)
+	bodyText = normalizeMixedDirectionText(bodyText)
+	ctaText = normalizeMixedDirectionText(ctaText)
 
 	ctx := context.Background()
 	_, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{

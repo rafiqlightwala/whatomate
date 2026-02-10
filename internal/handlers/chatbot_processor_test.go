@@ -199,6 +199,34 @@ func TestMatchKeywordRules_RegexMatch(t *testing.T) {
 	assert.False(t, matched2)
 }
 
+func TestMatchKeywordRules_RegexMatch_LegacyLookaheadCompatibility(t *testing.T) {
+	app := newProcessorTestApp(t)
+	org, account := createProcessorTestOrg(t, app)
+
+	rule := &models.KeywordRule{
+		BaseModel:       models.BaseModel{ID: uuid.New()},
+		OrganizationID:  org.ID,
+		WhatsAppAccount: account.Name,
+		Name:            "legacy-lookahead",
+		Keywords:        models.StringArray{`(?is)(?=.*(more|one|multiple|two|another))(?=.*(portfolio)).*`},
+		MatchType:       models.MatchTypeRegex,
+		CaseSensitive:   false,
+		ResponseType:    models.ResponseTypeText,
+		ResponseContent: models.JSONB{"body": "Multiple portfolio response"},
+		Priority:        10,
+		IsEnabled:       true,
+	}
+	require.NoError(t, app.DB.Create(rule).Error)
+
+	resp, matched := app.matchKeywordRules(org.ID, account.Name, "Can I create multiple portfolios?")
+	assert.True(t, matched)
+	require.NotNil(t, resp)
+	assert.Equal(t, "Multiple portfolio response", resp.Body)
+
+	_, matched2 := app.matchKeywordRules(org.ID, account.Name, "I only need one account")
+	assert.False(t, matched2)
+}
+
 func TestMatchKeywordRules_NoMatch(t *testing.T) {
 	app := newProcessorTestApp(t)
 	org, account := createProcessorTestOrg(t, app)
