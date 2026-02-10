@@ -386,8 +386,6 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		if keywordResponse.ReplyID == "broker_information" {
 			if err := a.sendAndSaveBuiltInBrokerPDF(account, contact); err != nil {
 				a.Log.Error("Failed to send broker PDF", "error", err, "contact", contact.PhoneNumber)
-			} else {
-				a.logSessionMessage(session.ID, models.DirectionOutgoing, "[Document: ListOfBrokersPSX.pdf]", "keyword_response_document")
 			}
 		}
 		return
@@ -2308,11 +2306,26 @@ func (a *App) generateGoogleResponse(settings *models.ChatbotSettings, session *
 
 // getSessionHistory retrieves recent messages from the session
 func (a *App) getSessionHistory(sessionID uuid.UUID, limit int) []models.ChatbotSessionMessage {
-	var messages []models.ChatbotSessionMessage
+	var fetched []models.ChatbotSessionMessage
 	a.DB.Where("session_id = ?", sessionID).
 		Order("created_at DESC").
-		Limit(limit).
-		Find(&messages)
+		Limit(limit * 3).
+		Find(&fetched)
+
+	messages := make([]models.ChatbotSessionMessage, 0, limit)
+	for _, m := range fetched {
+		// Exclude document-marker entries from AI context/history.
+		if m.StepName == "keyword_response_document" {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(m.Message), "[Document:") {
+			continue
+		}
+		messages = append(messages, m)
+		if len(messages) >= limit {
+			break
+		}
+	}
 
 	// Reverse to get chronological order
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
