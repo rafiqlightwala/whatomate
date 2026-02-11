@@ -135,7 +135,7 @@ func Load(configPath string) (*Config, error) {
 	// Load from environment variables (WHATOMATE_ prefix)
 	// e.g., WHATOMATE_DATABASE_HOST -> database.host
 	if err := k.Load(env.Provider("WHATOMATE_", ".", func(s string) string {
-		return strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, "WHATOMATE_")), "_", ".")
+		return mapEnvKey(strings.TrimPrefix(s, "WHATOMATE_"))
 	}), nil); err != nil {
 		return nil, err
 	}
@@ -149,6 +149,15 @@ func Load(configPath string) (*Config, error) {
 	setDefaults(&cfg)
 
 	return &cfg, nil
+}
+
+func mapEnvKey(key string) string {
+	normalized := strings.ToLower(key)
+	// Allow "__" to represent a literal "_" in final key names.
+	normalized = strings.ReplaceAll(normalized, "__", "\x00")
+	normalized = strings.ReplaceAll(normalized, "_", ".")
+	normalized = strings.ReplaceAll(normalized, "\x00", "_")
+	return normalized
 }
 
 func setDefaults(cfg *Config) {

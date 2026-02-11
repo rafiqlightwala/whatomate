@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+frontend/node_modules
+frontend/dist
+uploads
+coverage.out
+coverage.html
+*.log
+.DS_Store
