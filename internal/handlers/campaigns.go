@@ -16,6 +16,7 @@ import (
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CampaignRequest represents campaign create/update request
@@ -695,6 +696,13 @@ func (a *App) GetCampaignRecipients(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to list recipients", nil, "")
 	}
 
+	if a.ShouldMaskPhoneNumbers(orgID) {
+		for i := range recipients {
+			recipients[i].PhoneNumber = MaskPhoneNumber(recipients[i].PhoneNumber)
+			recipients[i].RecipientName = MaskIfPhoneNumber(recipients[i].RecipientName)
+		}
+	}
+
 	return r.SendEnvelope(map[string]interface{}{
 		"recipients": recipients,
 		"total":      len(recipients),
@@ -1011,28 +1019,31 @@ func (a *App) incrementCampaignStat(campaignID string, status string) {
 		return
 	}
 
-	if err := a.DB.Model(&models.BulkMessageCampaign{}).
-		Where("id = ?", campaignUUID).
-		Update(column, gorm.Expr(column+" + 1")).Error; err != nil {
-		a.Log.Error("Failed to increment campaign stat", "error", err, "campaign_id", campaignID, "column", column)
+	var campaign models.BulkMessageCampaign
+	campaign.ID = campaignUUID
+
+	// atomic update and return updated record
+	result := a.DB.Model(&campaign).
+		Clauses(clause.Returning{}).
+		Update(column, gorm.Expr(column+" + 1"))
+
+	if result.Error != nil {
+		a.Log.Error("Failed to increment campaign stat", "error", result.Error, "campaign_id", campaignID, "column", column)
 		return
 	}
 
 	// Broadcast stats update via WebSocket
-	if a.WSHub != nil {
-		var campaign models.BulkMessageCampaign
-		if err := a.DB.Where("id = ?", campaignUUID).First(&campaign).Error; err == nil {
-			a.WSHub.BroadcastToOrg(campaign.OrganizationID, websocket.WSMessage{
-				Type: websocket.TypeCampaignStatsUpdate,
-				Payload: map[string]interface{}{
-					"campaign_id":     campaignID,
-					"sent_count":      campaign.SentCount,
-					"delivered_count": campaign.DeliveredCount,
-					"read_count":      campaign.ReadCount,
-					"failed_count":    campaign.FailedCount,
-				},
-			})
-		}
+	if a.WSHub != nil && result.RowsAffected > 0 {
+		a.WSHub.BroadcastToOrg(campaign.OrganizationID, websocket.WSMessage{
+			Type: websocket.TypeCampaignStatsUpdate,
+			Payload: map[string]interface{}{
+				"campaign_id":     campaignID,
+				"sent_count":      campaign.SentCount,
+				"delivered_count": campaign.DeliveredCount,
+				"read_count":      campaign.ReadCount,
+				"failed_count":    campaign.FailedCount,
+			},
+		})
 	}
 }
 
