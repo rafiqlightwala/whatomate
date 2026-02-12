@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -62,4 +63,49 @@ func TestSeedBuiltinInvestifyAIContext_OverridesExistingContext(t *testing.T) {
 	assert.Equal(t, models.ContextTypeStatic, updated.ContextType)
 	assert.Empty(t, updated.TriggerKeywords)
 	assert.Equal(t, strings.TrimSpace(builtin.LoadInvestifyAIContextSummary()), strings.TrimSpace(updated.StaticContent))
+}
+
+func TestSeedBuiltinInvestifyKeywordRules_OverridesExistingRule(t *testing.T) {
+	app := newProcessorTestApp(t)
+	org, _ := createProcessorTestOrg(t, app)
+
+	_, err := app.seedBuiltinInvestifyKeywordRules(app.DB, org.ID)
+	require.NoError(t, err)
+
+	entries, err := builtin.LoadInvestifyKeywordEntries()
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	replies, err := builtin.LoadInvestifyReplies()
+	require.NoError(t, err)
+
+	first := entries[0]
+	conditionTag := fmt.Sprintf("%s:%03d", investifyBuiltinVersion, 1)
+
+	var existing models.KeywordRule
+	require.NoError(t, app.DB.Where("organization_id = ? AND conditions = ?", org.ID, conditionTag).First(&existing).Error)
+
+	require.NoError(t, app.DB.Model(&existing).Updates(map[string]interface{}{
+		"name":             "Custom Greeting",
+		"is_enabled":       false,
+		"priority":         1,
+		"keywords":         models.StringArray{"(?i)custom"},
+		"match_type":       models.MatchTypeContains,
+		"response_type":    models.ResponseTypeText,
+		"response_content": models.JSONB{"body": "custom body"},
+	}).Error)
+
+	_, err = app.seedBuiltinInvestifyKeywordRules(app.DB, org.ID)
+	require.NoError(t, err)
+
+	var updated models.KeywordRule
+	require.NoError(t, app.DB.Where("id = ?", existing.ID).First(&updated).Error)
+
+	assert.True(t, updated.IsEnabled)
+	assert.Equal(t, investifyBuiltinPriorityBase, updated.Priority)
+	assert.Equal(t, models.MatchTypeRegex, updated.MatchType)
+	assert.False(t, updated.CaseSensitive)
+	assert.Equal(t, models.StringArray{compileKeywordPattern(first.Keywords)}, updated.Keywords)
+	assert.Equal(t, strings.TrimSpace(replies[first.ReplyID][first.Language]), strings.TrimSpace(fmt.Sprintf("%v", updated.ResponseContent["body"])))
+	assert.Equal(t, conditionTag, updated.Conditions)
 }

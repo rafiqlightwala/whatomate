@@ -121,7 +121,20 @@ func (a *App) seedBuiltinInvestifyKeywordRules(db *gorm.DB, orgID uuid.UUID) (in
 		var existing models.KeywordRule
 		err := db.Where("organization_id = ? AND conditions = ?", orgID, conditionTag).First(&existing).Error
 		if err == nil {
-			// Seed-once behavior: if builtin rule already exists, keep user edits intact.
+			// Always refresh builtin keyword rules on startup/build.
+			updateFields := map[string]interface{}{
+				"name":             rule.Name,
+				"is_enabled":       rule.IsEnabled,
+				"priority":         rule.Priority,
+				"keywords":         rule.Keywords,
+				"match_type":       rule.MatchType,
+				"case_sensitive":   rule.CaseSensitive,
+				"response_type":    rule.ResponseType,
+				"response_content": rule.ResponseContent,
+			}
+			if err := db.Model(&existing).Updates(updateFields).Error; err != nil {
+				return seeded, err
+			}
 			continue
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
