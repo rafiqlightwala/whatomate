@@ -82,6 +82,18 @@
 - Ask user to disable ad-blocking or DNS-filter apps/services temporarily (for example AdGuard, NextDNS, Blokada, DNS filter apps, Pi-hole, 1.1.1.1 filtering mode), then reopen Investify.
 - If issue persists, request screenshot + device model + OS version.
 
+### Ad Complaints (Vulgar Ads or Too Many Ads)
+- If user reports vulgar/bad ad content:
+  - Clarify that Investify does not manually choose each ad.
+  - Explain that Google Ad Network serves ads based on factors like IP address and other signals, and this is not directly controlled by Investify.
+  - Confirm we can still submit a complaint/escalation on their behalf.
+  - Ask them to share a screenshot of the vulgar/bad ad at `support@investify.pk` next time it appears.
+- Do not confuse vulgar-ad complaints with Private DNS/ad-blocking issues; do not suggest Private DNS steps in this scenario.
+- If user says there are too many ads:
+  - Clarify that Investify shows one popup ad every 5 minutes, not more frequently.
+  - Explain this supports app operating costs, including expensive PSX licensing fees.
+  - Mention they can purchase the `Removing Ads` subscription to remove ads.
+
 ### Multi-Portfolio Expectation
 - Current expected response: multiple portfolios are not available yet but we are working on the feature.
 - Acknowledge feature request politely and avoid promising a specific release date unless officially confirmed.
