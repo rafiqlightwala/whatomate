@@ -8,7 +8,7 @@
     "ur": "اگر آپ کا انویسٹفی اکاؤنٹ پہلے سے موجود ہے اور آپ پاس ورڈ ری سیٹ کرنا چاہتے ہیں تو یہ اقدامات کریں:\n\n۱. انویسٹفی ایپ کھولیں اور پہلے صفحے پر '*Forgot your password*' پر ٹیپ کریں\n۲. اگلی اسکرین پر اپنا ای میل درج کریں اور '*Submit*' پر ٹیپ کریں\n۳. آپ کو ایک ای میل میں 6 ہندسوں کا کوڈ ملے گا۔ ای میل کھولیں اور کوڈ نوٹ کریں\n۴. ایپ پر واپس آئیں، یہ 6 ہندسوں والا کوڈ درج کریں اور '*Verify Code*' پر ٹیپ کریں\n۵. '*Choose New Password*' اسکرین کھلے گی۔ نیا پاس ورڈ درج کریں، پھر اسی پاس ورڈ کو '*Confirm Password*' میں دوبارہ لکھیں، اور '*Reset Password*' پر ٹیپ کریں\n۶. کامیابی کا پیغام ظاہر ہوگا؛ اب نئے پاس ورڈ سے لاگ اِن کریں"
   },
   "greeting": {
-    "en": "Hello! I am a support team member of the _Investify_. How can I guide you today?",
+    "en": "Hello! I am a member of the Investify Support Team. How can I guide you today?",
     "ur": "السلام علیکم، میں ‫Investify‬ کی سپورٹ ٹیم کا نمائندہ ہوں۔ میں آپ کی کس طرح رہنمائی کر سکتا ہوں؟"
   },
   "broker_information": {
