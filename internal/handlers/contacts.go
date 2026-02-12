@@ -460,8 +460,8 @@ func (a *App) markMessagesAsRead(orgID uuid.UUID, contactID uuid.UUID, contact *
 	a.DB.Model(contact).Update("is_read", true)
 
 	if len(unreadMessages) > 0 && contact.WhatsAppAccount != "" {
-		var account models.WhatsAppAccount
-		if err := a.DB.Where("organization_id = ? AND name = ?", orgID, contact.WhatsAppAccount).First(&account).Error; err == nil {
+		account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount)
+		if err == nil {
 			if account.AutoReadReceipt {
 				a.wg.Add(1)
 				go func() {
@@ -470,7 +470,7 @@ func (a *App) markMessagesAsRead(orgID uuid.UUID, contactID uuid.UUID, contact *
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
 
-					waAccount := a.toWhatsAppAccount(&account)
+					waAccount := a.toWhatsAppAccount(account)
 					for _, msg := range unreadMessages {
 						// Check if context was cancelled
 						if ctx.Err() != nil {
@@ -592,6 +592,9 @@ func (a *App) SendMessage(r *fastglue.Request) error {
 
 	opts := DefaultSendOptions()
 	opts.SentByUserID = &userID
+	// Manual sends from chat UI should return delivery API errors immediately
+	// instead of failing silently in async background send.
+	opts.Async = false
 
 	ctx := context.Background()
 	message, err := a.SendOutgoingMessage(ctx, msgReq, opts)
@@ -636,6 +639,7 @@ func (a *App) resolveWhatsAppAccount(orgID uuid.UUID, accountName string) (*mode
 		if err := a.DB.Where("name = ? AND organization_id = ?", accountName, orgID).First(&account).Error; err != nil {
 			return nil, fmt.Errorf("WhatsApp account not found")
 		}
+		a.decryptAccountSecrets(&account)
 		return &account, nil
 	}
 
@@ -646,6 +650,7 @@ func (a *App) resolveWhatsAppAccount(orgID uuid.UUID, accountName string) (*mode
 			return nil, fmt.Errorf("no WhatsApp account configured")
 		}
 	}
+	a.decryptAccountSecrets(&account)
 	return &account, nil
 }
 
@@ -728,18 +733,9 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if contact.WhatsAppAccount != "" {
-		if err := a.DB.Where("name = ? AND organization_id = ?", contact.WhatsAppAccount, orgID).First(&account).Error; err != nil {
-			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
-		}
-	} else {
-		// Get default outgoing account
-		if err := a.DB.Where("organization_id = ? AND is_default_outgoing = ?", orgID, true).First(&account).Error; err != nil {
-			if err := a.DB.Where("organization_id = ?", orgID).First(&account).Error; err != nil {
-				return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "No WhatsApp account configured", nil, "")
-			}
-		}
+	account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Failed to resolve WhatsApp account", nil, "")
 	}
 
 	// Save file locally first
@@ -751,7 +747,7 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 
 	// Build and send via unified message sender
 	msgReq := OutgoingMessageRequest{
-		Account:       &account,
+		Account:       account,
 		Contact:       &contact,
 		Type:          models.MessageType(mediaType),
 		MediaData:     fileData,
@@ -763,6 +759,8 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 
 	opts := DefaultSendOptions()
 	opts.SentByUserID = &userID
+	// Keep manual media sends synchronous for immediate error feedback.
+	opts.Async = false
 
 	ctx := context.Background()
 	message, err := a.SendOutgoingMessage(ctx, msgReq, opts)
@@ -880,17 +878,9 @@ func (a *App) SendReaction(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if contact.WhatsAppAccount != "" {
-		if err := a.DB.Where("name = ? AND organization_id = ?", contact.WhatsAppAccount, orgID).First(&account).Error; err != nil {
-			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
-		}
-	} else {
-		if err := a.DB.Where("organization_id = ? AND is_default_outgoing = ?", orgID, true).First(&account).Error; err != nil {
-			if err := a.DB.Where("organization_id = ?", orgID).First(&account).Error; err != nil {
-				return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "No WhatsApp account configured", nil, "")
-			}
-		}
+	account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Failed to resolve WhatsApp account", nil, "")
 	}
 
 	// Parse existing reactions from Metadata
@@ -950,7 +940,7 @@ func (a *App) SendReaction(r *fastglue.Request) error {
 	}
 
 	// Send reaction to WhatsApp API
-	go a.sendWhatsAppReaction(&account, &contact, &message, req.Emoji)
+	go a.sendWhatsAppReaction(account, &contact, &message, req.Emoji)
 
 	// Broadcast via WebSocket
 	if a.WSHub != nil {
