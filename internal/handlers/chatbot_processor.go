@@ -995,13 +995,6 @@ func (a *App) sendAndSaveBuiltInBrokerPDF(account *models.WhatsAppAccount, conta
 	return nil
 }
 
-func (a *App) applyChatbotReplyDelay() {
-	if a == nil || a.Config == nil || !a.Config.ChatbotDelay.Enabled {
-		return
-	}
-	a.applyChatbotReplyDelayRange(a.Config.ChatbotDelay.MinSeconds, a.Config.ChatbotDelay.MaxSeconds)
-}
-
 func (a *App) applyChatbotReplyDelayForContact(account *models.WhatsAppAccount, contact *models.Contact) {
 	if a == nil || a.Config == nil || !a.Config.ChatbotDelay.Enabled {
 		return
