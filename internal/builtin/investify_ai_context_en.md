@@ -22,6 +22,7 @@
 - Pakistan Stock Exchange (PSX) **market-information and portfolio-tracking app**
 - Tracks PSX:
   - Stocks and indices
+  - Real-time prices and Live Data in the app (if someone asks for a Share info or price ask them to search in the app directly)
   - Charts and historical data
   - Company announcements and profiles
   - Business news
@@ -32,6 +33,7 @@
 - No real buy/sell execution
 - No cash deposits
 - No trading withdrawals
+- Can not connect to a broker directly but trades have to be entered manually to Investify to track them
 
 ---
 
