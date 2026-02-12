@@ -7,6 +7,7 @@ export interface Contact {
   phone_number: string
   name: string
   profile_name?: string
+  last_message_preview?: string
   avatar_url?: string
   status: string
   tags: string[]
@@ -250,20 +251,52 @@ export const useContactsStore = defineStore('contacts', () => {
     }
   }
 
+  function getMessagePreview(message: Message): string {
+    if (message.message_type === 'text') {
+      if (typeof message.content === 'string') return message.content
+      return message.content?.body || ''
+    }
+    if (message.message_type === 'interactive') {
+      if (typeof message.content === 'string') return message.content
+      return message.interactive_data?.body || message.content?.body || '[Interactive]'
+    }
+    if (message.message_type === 'button_reply') {
+      if (typeof message.content === 'string') return message.content
+      return message.content?.body || '[Button Reply]'
+    }
+    if (message.message_type === 'image') return '[Image]'
+    if (message.message_type === 'video') return '[Video]'
+    if (message.message_type === 'audio') return '[Audio]'
+    if (message.message_type === 'document') return '[Document]'
+    if (message.message_type === 'location') return '[Location]'
+    if (message.message_type === 'contacts') return '[Contact]'
+    return '[Message]'
+  }
+
+  function updateContactActivityFromMessage(message: Message) {
+    const contactId = String(message.contact_id)
+    const contact = contacts.value.find(c => c.id === contactId)
+    if (!contact) return
+
+    contact.last_message_at = message.created_at
+    contact.last_message_preview = getMessagePreview(message)
+
+    const isCurrentContact = currentContact.value?.id === contactId
+    if (message.direction === 'incoming') {
+      if (isCurrentContact) {
+        contact.unread_count = 0
+      } else {
+        contact.unread_count = (contact.unread_count || 0) + 1
+      }
+    }
+  }
+
   function addMessage(message: Message) {
     // Check if message already exists
     const exists = messages.value.some(m => m.id === message.id)
     if (!exists) {
       messages.value.push(message)
-
-      // Update contact
-      const contact = contacts.value.find(c => c.id === message.contact_id)
-      if (contact) {
-        contact.last_message_at = message.created_at
-        if (message.direction === 'incoming') {
-          contact.unread_count++
-        }
-      }
+      updateContactActivityFromMessage(message)
     }
   }
 
@@ -334,6 +367,7 @@ export const useContactsStore = defineStore('contacts', () => {
     sendMessage,
     sendTemplate,
     addMessage,
+    updateContactActivityFromMessage,
     updateMessageStatus,
     setCurrentContact,
     clearMessages,

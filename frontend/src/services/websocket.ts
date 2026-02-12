@@ -43,6 +43,7 @@ function showNotification(title: string, body: string, contactId: string) {
 const WS_TYPE_AUTH = 'auth'
 const WS_TYPE_NEW_MESSAGE = 'new_message'
 const WS_TYPE_STATUS_UPDATE = 'status_update'
+const WS_TYPE_MESSAGE_STATUS = 'message_status'
 const WS_TYPE_SET_CONTACT = 'set_contact'
 const WS_TYPE_PING = 'ping'
 const WS_TYPE_PONG = 'pong'
@@ -82,6 +83,17 @@ class WebSocketService {
   private hasConnectedBefore = false
   private campaignStatsCallbacks: ((payload: any) => void)[] = []
   private getTokenFn: (() => Promise<string | null>) | null = null
+
+  private normalizeID(value: any): string {
+    if (!value) return ''
+    if (typeof value === 'string') return value
+    if (typeof value === 'number') return String(value)
+    if (typeof value === 'object') {
+      if (typeof value.id === 'string') return value.id
+      if (typeof value.ID === 'string') return value.ID
+    }
+    return String(value)
+  }
 
   async connect(getToken?: () => Promise<string | null>) {
     if (this.ws?.readyState === WebSocket.OPEN) {
@@ -161,6 +173,7 @@ class WebSocketService {
           this.handleNewMessage(store, message.payload)
           break
         case WS_TYPE_STATUS_UPDATE:
+        case WS_TYPE_MESSAGE_STATUS:
           this.handleStatusUpdate(store, message.payload)
           break
         case WS_TYPE_AGENT_TRANSFER:
@@ -206,15 +219,18 @@ class WebSocketService {
   }
 
   private handleNewMessage(store: ReturnType<typeof useContactsStore>, payload: any) {
+    const payloadContactID = this.normalizeID(payload.contact_id)
+
     // Check if this message is for the current contact
     const currentContact = store.currentContact
-    const isViewingThisContact = currentContact && payload.contact_id === currentContact.id
+    const currentContactID = currentContact ? this.normalizeID(currentContact.id) : ''
+    const isViewingThisContact = !!currentContactID && payloadContactID === currentContactID
 
     if (isViewingThisContact) {
       // Add message to the store
       store.addMessage({
         id: payload.id,
-        contact_id: payload.contact_id,
+        contact_id: payloadContactID,
         direction: payload.direction,
         message_type: payload.message_type,
         content: payload.content,
@@ -233,6 +249,28 @@ class WebSocketService {
         updated_at: payload.updated_at
       })
     }
+
+    // Keep sidebar conversation activity in sync immediately.
+    store.updateContactActivityFromMessage({
+      id: this.normalizeID(payload.id),
+      contact_id: payloadContactID,
+      direction: payload.direction,
+      message_type: payload.message_type,
+      content: payload.content,
+      media_url: payload.media_url,
+      media_mime_type: payload.media_mime_type,
+      media_filename: payload.media_filename,
+      interactive_data: payload.interactive_data,
+      status: payload.status,
+      wamid: payload.wamid,
+      error_message: payload.error_message,
+      is_reply: payload.is_reply,
+      reply_to_message_id: payload.reply_to_message_id,
+      reply_to_message: payload.reply_to_message,
+      reactions: payload.reactions,
+      created_at: payload.created_at,
+      updated_at: payload.updated_at
+    })
 
     // Show toast notification for incoming messages if:
     // 1. Message is incoming (from customer, not chatbot/agent)
@@ -256,7 +294,7 @@ class WebSocketService {
         const preview = messagePreview.length > 50
           ? messagePreview.substring(0, 50) + '...'
           : messagePreview
-        const contactId = payload.contact_id
+        const contactId = payloadContactID
 
         // Play notification sound and show browser notification
         playNotificationSound()
@@ -264,8 +302,11 @@ class WebSocketService {
       }
     }
 
-    // Update contacts list (for unread count, last message preview)
-    store.fetchContacts()
+    // Refresh from API only if this contact isn't already loaded in current list.
+    // This avoids stale sidebar when new activity comes from a not-yet-loaded contact.
+    if (!store.contacts.some(c => this.normalizeID(c.id) === payloadContactID)) {
+      store.fetchContacts()
+    }
   }
 
   private handleStatusUpdate(store: ReturnType<typeof useContactsStore>, payload: any) {
