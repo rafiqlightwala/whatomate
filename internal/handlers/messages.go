@@ -281,6 +281,10 @@ func (a *App) createOutgoingMessage(req OutgoingMessageRequest, opts MessageSend
 				"template_name": req.Template.Name,
 				"template_id":   req.Template.ID.String(),
 			}
+			// Store template buttons so they render in the chat bubble
+			if len(req.Template.Buttons) > 0 {
+				msg.InteractiveData = a.buildInteractiveData(req)
+			}
 		}
 	}
 
@@ -294,8 +298,16 @@ func (a *App) createOutgoingMessage(req OutgoingMessageRequest, opts MessageSend
 	return msg
 }
 
-// buildInteractiveData creates the InteractiveData JSONB for interactive messages
+// buildInteractiveData creates the InteractiveData JSONB for interactive and template messages
 func (a *App) buildInteractiveData(req OutgoingMessageRequest) models.JSONB {
+	// Template buttons: stored as JSONBArray on Template.Buttons
+	if req.Template != nil && len(req.Template.Buttons) > 0 {
+		return models.JSONB{
+			"type":    "button",
+			"buttons": req.Template.Buttons,
+		}
+	}
+
 	switch req.InteractiveType {
 	case "cta_url":
 		return models.JSONB{
@@ -337,6 +349,19 @@ func (a *App) finalizeMessageSend(msg *models.Message, req OutgoingMessageReques
 			"error_message": err.Error(),
 		})
 		a.Log.Error("Failed to send message", "error", err, "message_id", msg.ID, "type", msg.MessageType)
+
+		// Broadcast failure status via WebSocket so frontend updates immediately
+		if opts.BroadcastWebSocket && a.WSHub != nil {
+			a.WSHub.BroadcastToOrg(req.Account.OrganizationID, websocket.WSMessage{
+				Type: websocket.TypeStatusUpdate,
+				Payload: map[string]any{
+					"message_id":    msg.ID,
+					"contact_id":    req.Contact.ID,
+					"status":        models.MessageStatusFailed,
+					"error_message": err.Error(),
+				},
+			})
+		}
 		return
 	}
 
@@ -354,7 +379,7 @@ func (a *App) finalizeMessageSend(msg *models.Message, req OutgoingMessageReques
 	// Broadcast status update via WebSocket
 	if opts.BroadcastWebSocket && a.WSHub != nil {
 		a.WSHub.BroadcastToOrg(req.Account.OrganizationID, websocket.WSMessage{
-			Type: "message_status",
+			Type: websocket.TypeStatusUpdate,
 			Payload: map[string]any{
 				"message_id": msg.ID,
 				"contact_id": req.Contact.ID,
@@ -550,7 +575,6 @@ func (a *App) SendTemplateMessage(r *fastglue.Request) error {
 
 	// Get contact or use phone number directly
 	var contact *models.Contact
-	var phoneNumber string
 
 	if req.ContactID != "" {
 		cID, err := uuid.Parse(req.ContactID)
@@ -562,10 +586,9 @@ func (a *App) SendTemplateMessage(r *fastglue.Request) error {
 			return nil
 		}
 		contact = c
-		phoneNumber = c.PhoneNumber
 	} else {
 		// Find or create contact from phone number
-		phoneNumber = req.PhoneNumber
+		phoneNumber := req.PhoneNumber
 		var c models.Contact
 		err := a.DB.Where("phone_number = ? AND organization_id = ?", phoneNumber, orgID).First(&c).Error
 		if err != nil {
@@ -644,11 +667,20 @@ func (a *App) SendTemplateMessage(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to send template message", nil, "")
 	}
 
-	return r.SendEnvelope(map[string]any{
-		"message_id":    message.ID,
-		"status":        "pending",
-		"template_name": template.Name,
-		"phone_number":  phoneNumber,
-	})
+	// Build full message response (same shape as SendMessage)
+	response := MessageResponse{
+		ID:              message.ID,
+		ContactID:       message.ContactID,
+		Direction:       message.Direction,
+		MessageType:     message.MessageType,
+		Content:         map[string]string{"body": message.Content},
+		InteractiveData: message.InteractiveData,
+		Status:          message.Status,
+		IsReply:         message.IsReply,
+		WhatsAppAccount: message.WhatsAppAccount,
+		CreatedAt:       message.CreatedAt,
+		UpdatedAt:       message.UpdatedAt,
+	}
+	return r.SendEnvelope(response)
 }
 
