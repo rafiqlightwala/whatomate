@@ -111,8 +111,7 @@ func (a *App) CreateFlow(r *fastglue.Request) error {
 	}
 
 	// Verify account exists and belongs to org
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, req.WhatsAppAccount).First(&account).Error; err != nil {
+	if _, err := a.resolveWhatsAppAccount(orgID, req.WhatsAppAccount); err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
 	}
 
@@ -279,14 +278,14 @@ func (a *App) SaveFlowToMeta(r *fastglue.Request) error {
 	}
 
 	// Get the WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, flow.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, flow.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
 	}
 
 	// Create WhatsApp API client
 	waClient := whatsapp.New(a.Log)
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	a.Log.Info("SaveFlowToMeta: Account details",
 		"account_name", account.Name,
@@ -391,14 +390,14 @@ func (a *App) PublishFlow(r *fastglue.Request) error {
 	}
 
 	// Get the WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, flow.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, flow.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
 	}
 
 	// Create WhatsApp API client
 	waClient := whatsapp.New(a.Log)
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	ctx := context.Background()
 
@@ -460,13 +459,13 @@ func (a *App) DeprecateFlow(r *fastglue.Request) error {
 	// Call Meta API to deprecate the flow if we have a Meta flow ID
 	if flow.MetaFlowID != "" {
 		// Get the WhatsApp account
-		var account models.WhatsAppAccount
-		if err := a.DB.Where("organization_id = ? AND name = ?", orgID, flow.WhatsAppAccount).First(&account).Error; err != nil {
+		account, err := a.resolveWhatsAppAccount(orgID, flow.WhatsAppAccount)
+		if err != nil {
 			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
 		}
 
 		waClient := whatsapp.New(a.Log)
-		waAccount := a.toWhatsAppAccount(&account)
+		waAccount := a.toWhatsAppAccount(account)
 
 		ctx := context.Background()
 		if err := waClient.DeprecateFlow(ctx, waAccount, flow.MetaFlowID); err != nil {
@@ -557,14 +556,14 @@ func (a *App) SyncFlows(r *fastglue.Request) error {
 	}
 
 	// Get the WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, req.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, req.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
 	}
 
 	// Create WhatsApp API client
 	waClient := whatsapp.New(a.Log)
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	ctx := context.Background()
 

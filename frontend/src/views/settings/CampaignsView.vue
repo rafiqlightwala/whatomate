@@ -387,7 +387,6 @@ let unsubscribeCampaignStats: (() => void) | null = null
 onMounted(async () => {
   await Promise.all([
     fetchCampaigns(),
-    fetchTemplates(),
     fetchAccounts()
   ])
 
@@ -465,15 +464,26 @@ watch([filterStatus, selectedRange], () => {
   }
 })
 
-async function fetchTemplates() {
+async function fetchTemplates(account?: string) {
   try {
-    const response = await templatesService.list()
-    templates.value = response.data?.templates || []
+    const response = await templatesService.list(account ? { account } : undefined)
+    const data = (response.data as any).data || response.data
+    templates.value = data.templates || []
   } catch (error) {
     console.error('Failed to fetch templates:', error)
     templates.value = []
   }
 }
+
+// Re-fetch templates when account changes
+watch(() => newCampaign.value.whatsapp_account, (account) => {
+  newCampaign.value.template_id = ''
+  if (account) {
+    fetchTemplates(account)
+  } else {
+    templates.value = []
+  }
+})
 
 async function fetchAccounts() {
   try {

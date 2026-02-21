@@ -49,9 +49,10 @@ test.describe('Chatbot Flow Builder - Buttons Message Type', () => {
     await expect(builder.buttonOptionsLabel).toBeVisible()
   })
 
-  test('should show Reply and URL add-buttons', async () => {
+  test('should show Reply, URL and Phone add-buttons', async () => {
     await expect(builder.addReplyButton).toBeVisible()
     await expect(builder.addUrlButton).toBeVisible()
+    await expect(builder.addPhoneButton).toBeVisible()
   })
 
   test('should show message textarea alongside buttons config', async () => {
@@ -71,17 +72,53 @@ test.describe('Chatbot Flow Builder - Buttons Message Type', () => {
     await expect(builder.buttonOptionsLabel).toContainText('1/10')
   })
 
-  test('should add a URL button', async () => {
+  test('should add a URL button with /2 count', async () => {
     await builder.addUrlButton.click()
     await expect(builder.getButtonTitleInput(0)).toBeVisible()
     await expect(builder.page.getByPlaceholder(/https:\/\/example.com/i)).toBeVisible()
+    await expect(builder.buttonOptionsLabel).toContainText('1/2')
   })
 
-  test('should add multiple buttons and show correct count', async () => {
+  test('should add a phone button', async () => {
+    await builder.addPhoneButton.click()
+    await expect(builder.getButtonTitleInput(0)).toBeVisible()
+    await expect(builder.page.getByPlaceholder(/\+1234567890/)).toBeVisible()
+    await expect(builder.buttonOptionsLabel).toContainText('1/2')
+  })
+
+  test('should add multiple reply buttons and show correct count', async () => {
     await builder.addReplyButton.click()
     await builder.addReplyButton.click()
-    await builder.addUrlButton.click()
+    await builder.addReplyButton.click()
     await expect(builder.buttonOptionsLabel).toContainText('3/10')
+  })
+
+  test('should add multiple CTA buttons and show correct count', async () => {
+    await builder.addUrlButton.click()
+    await builder.addPhoneButton.click()
+    await expect(builder.buttonOptionsLabel).toContainText('2/2')
+  })
+
+  test('should disable CTA buttons when reply buttons exist', async () => {
+    await builder.addReplyButton.click()
+    await expect(builder.addUrlButton).toBeDisabled()
+    await expect(builder.addPhoneButton).toBeDisabled()
+    // Reply button still enabled
+    await expect(builder.addReplyButton).toBeEnabled()
+  })
+
+  test('should disable reply button when CTA buttons exist', async () => {
+    await builder.addUrlButton.click()
+    await expect(builder.addReplyButton).toBeDisabled()
+    // Other CTA buttons still enabled
+    await expect(builder.addPhoneButton).toBeEnabled()
+  })
+
+  test('should enforce max 2 CTA buttons', async () => {
+    await builder.addUrlButton.click()
+    await builder.addPhoneButton.click()
+    await expect(builder.addUrlButton).toBeDisabled()
+    await expect(builder.addPhoneButton).toBeDisabled()
   })
 
   test('should remove a button', async () => {

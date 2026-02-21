@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
@@ -19,7 +18,7 @@ func (a *App) GetBusinessProfile(r *fastglue.Request) error {
 		return nil
 	}
 
-	account, err := findByIDAndOrg[models.WhatsAppAccount](a.DB, r, id, orgID, "Account")
+	account, err := a.resolveWhatsAppAccountByID(r, id, orgID)
 	if err != nil {
 		return nil
 	}
@@ -49,7 +48,7 @@ func (a *App) UpdateBusinessProfile(r *fastglue.Request) error {
 		return nil
 	}
 
-	account, err := findByIDAndOrg[models.WhatsAppAccount](a.DB, r, id, orgID, "Account")
+	account, err := a.resolveWhatsAppAccountByID(r, id, orgID)
 	if err != nil {
 		return nil
 	}
@@ -89,7 +88,7 @@ func (a *App) UpdateProfilePicture(r *fastglue.Request) error {
 		return nil
 	}
 
-	account, err := findByIDAndOrg[models.WhatsAppAccount](a.DB, r, id, orgID, "Account")
+	account, err := a.resolveWhatsAppAccountByID(r, id, orgID)
 	if err != nil {
 		return nil
 	}

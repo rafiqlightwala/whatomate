@@ -111,14 +111,14 @@ func (a *App) CreateCatalog(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, req.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, req.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "WhatsApp account not found", nil, "")
 	}
 
 	// Create catalog in Meta
 	ctx := context.Background()
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	metaCatalogID, err := a.WhatsApp.CreateCatalog(ctx, waAccount, req.Name)
 	if err != nil {
@@ -188,14 +188,14 @@ func (a *App) DeleteCatalog(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, catalog.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, catalog.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "WhatsApp account not found", nil, "")
 	}
 
 	// Delete from Meta
 	ctx := context.Background()
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	if err := a.WhatsApp.DeleteCatalog(ctx, waAccount, catalog.MetaCatalogID); err != nil {
 		a.Log.Error("Failed to delete catalog from Meta", "error", err)
@@ -231,14 +231,14 @@ func (a *App) SyncCatalogs(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, req.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, req.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "WhatsApp account not found", nil, "")
 	}
 
 	// Fetch catalogs from Meta
 	ctx := context.Background()
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	metaCatalogs, err := a.WhatsApp.ListCatalogs(ctx, waAccount)
 	if err != nil {
@@ -343,8 +343,8 @@ func (a *App) CreateCatalogProduct(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, catalog.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, catalog.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "WhatsApp account not found", nil, "")
 	}
 
@@ -355,7 +355,7 @@ func (a *App) CreateCatalogProduct(r *fastglue.Request) error {
 
 	// Create product in Meta
 	ctx := context.Background()
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	productInput := &whatsapp.ProductInput{
 		Name:        req.Name,
@@ -445,14 +445,14 @@ func (a *App) UpdateCatalogProduct(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, catalog.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, catalog.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "WhatsApp account not found", nil, "")
 	}
 
 	// Update product in Meta
 	ctx := context.Background()
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	productInput := &whatsapp.ProductInput{
 		Name:        req.Name,
@@ -523,14 +523,14 @@ func (a *App) DeleteCatalogProduct(r *fastglue.Request) error {
 	}
 
 	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("organization_id = ? AND name = ?", orgID, catalog.WhatsAppAccount).First(&account).Error; err != nil {
+	account, err := a.resolveWhatsAppAccount(orgID, catalog.WhatsAppAccount)
+	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "WhatsApp account not found", nil, "")
 	}
 
 	// Delete from Meta
 	ctx := context.Background()
-	waAccount := a.toWhatsAppAccount(&account)
+	waAccount := a.toWhatsAppAccount(account)
 
 	if err := a.WhatsApp.DeleteProduct(ctx, waAccount, product.MetaProductID); err != nil {
 		a.Log.Error("Failed to delete product from Meta", "error", err)

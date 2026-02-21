@@ -185,11 +185,10 @@ func (a *App) UpdateAccount(r *fastglue.Request) error {
 		return nil
 	}
 
-	account, err := findByIDAndOrg[models.WhatsAppAccount](a.DB, r, id, orgID, "Account")
+	account, err := a.resolveWhatsAppAccountByID(r, id, orgID)
 	if err != nil {
 		return nil
 	}
-	a.decryptAccountSecrets(account)
 
 	var req AccountRequest
 	if err := a.decodeRequest(r, &req); err != nil {
@@ -300,11 +299,10 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 		return nil
 	}
 
-	account, err := findByIDAndOrg[models.WhatsAppAccount](a.DB, r, id, orgID, "Account")
+	account, err := a.resolveWhatsAppAccountByID(r, id, orgID)
 	if err != nil {
 		return nil
 	}
-	a.decryptAccountSecrets(account)
 
 	// Use the comprehensive validation function
 	if err := a.validateAccountCredentials(account.PhoneID, account.BusinessID, account.AccessToken, account.APIVersion); err != nil {
@@ -425,11 +423,10 @@ func (a *App) SubscribeApp(r *fastglue.Request) error {
 		return nil
 	}
 
-	account, err := findByIDAndOrg[models.WhatsAppAccount](a.DB, r, id, orgID, "Account")
+	account, err := a.resolveWhatsAppAccountByID(r, id, orgID)
 	if err != nil {
 		return nil
 	}
-	a.decryptAccountSecrets(account)
 
 	// Subscribe the app to webhooks
 	ctx := context.Background()

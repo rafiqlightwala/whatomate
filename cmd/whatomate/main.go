@@ -222,6 +222,7 @@ func runServer(args []string) {
 		Handler:      corsWrapper(g.Handler(), allowedOrigins),
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
+		MaxRequestBodySize: 15 * 1024 * 1024,
 		Name:         "Whatomate",
 	}
 

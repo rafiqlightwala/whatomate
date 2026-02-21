@@ -217,10 +217,120 @@ export class ChatPage extends BasePage {
     await actionBtns.last().click({ force: true })
   }
 
+  // Account tabs helpers
+  get accountTabsContainer(): Locator {
+    return this.page.locator('[class*="flex-shrink-0"]').filter({ has: this.page.locator('button') }).filter({ hasText: /.+/ }).last()
+  }
+
+  getAccountTab(accountName: string): Locator {
+    return this.page.locator('button.rounded-md.text-xs').filter({ hasText: accountName })
+  }
+
+  get accountTabs(): Locator {
+    return this.page.locator('button.rounded-md.text-xs.font-medium')
+  }
+
+  get activeAccountTab(): Locator {
+    return this.page.locator('button.rounded-md.text-xs[class*="bg-emerald"]')
+  }
+
+  get inactiveAccountTabs(): Locator {
+    return this.page.locator('button.rounded-md.text-xs:not([class*="bg-emerald"])')
+  }
+
+  async switchAccount(accountName: string) {
+    await this.getAccountTab(accountName).click()
+    await this.page.waitForLoadState('networkidle')
+  }
+
   // Custom actions
   async executeCustomAction(actionName: string) {
     await this.page.getByRole('button').filter({ has: this.page.locator('.lucide-zap') }).click()
     await this.page.locator('[role="menuitem"], .action-item').filter({ hasText: actionName }).click()
+  }
+
+  // Service window helpers
+  get serviceWindowBanner(): Locator {
+    return this.page.locator('text=24-hour messaging window has expired')
+  }
+
+  get serviceWindowSendTemplateButton(): Locator {
+    return this.page.getByRole('button', { name: /Send Template/i })
+  }
+
+  async expectServiceWindowExpired() {
+    await expect(this.serviceWindowBanner).toBeVisible({ timeout: 5000 })
+    await expect(this.serviceWindowSendTemplateButton).toBeVisible()
+  }
+
+  async expectServiceWindowOpen() {
+    await expect(this.serviceWindowBanner).not.toBeVisible()
+  }
+
+  // Template picker helpers
+  get templatePickerButton(): Locator {
+    return this.page.getByRole('button').filter({ has: this.page.locator('.lucide-layout-template-icon') })
+  }
+
+  get templatePopover(): Locator {
+    return this.page.locator('[data-radix-popper-content-wrapper], [data-state="open"][role="dialog"]').filter({ has: this.page.locator('input[placeholder*="earch template"]') })
+  }
+
+  get templateSearchInput(): Locator {
+    return this.page.locator('input[placeholder*="earch template"]')
+  }
+
+  get templateDialog(): Locator {
+    return this.page.locator('[role="dialog"][data-state="open"]').filter({ hasText: /Preview|Fill Parameters/i })
+  }
+
+  get templateDialogSendButton(): Locator {
+    return this.templateDialog.getByRole('button', { name: /Send/i })
+  }
+
+  get templateDialogCancelButton(): Locator {
+    return this.templateDialog.getByRole('button', { name: /Cancel/i })
+  }
+
+  async openTemplatePicker() {
+    await this.templatePickerButton.click()
+    await this.templateSearchInput.waitFor({ state: 'visible' })
+  }
+
+  async searchTemplates(term: string) {
+    await this.templateSearchInput.fill(term)
+    await this.page.waitForTimeout(300)
+  }
+
+  getTemplateItem(name: string): Locator {
+    return this.page.locator('button.w-full.text-left').filter({ hasText: name })
+  }
+
+  async selectTemplate(name: string) {
+    await this.getTemplateItem(name).click()
+    await this.templateDialog.waitFor({ state: 'visible' })
+  }
+
+  async fillTemplateParam(paramName: string, value: string) {
+    const paramField = this.templateDialog.locator('.space-y-1').filter({ hasText: paramName }).locator('input')
+    await paramField.fill(value)
+  }
+
+  async sendTemplate() {
+    await this.templateDialogSendButton.click()
+  }
+
+  async cancelTemplateDialog() {
+    await this.templateDialogCancelButton.click()
+    await this.templateDialog.waitFor({ state: 'hidden' })
+  }
+
+  getTemplatePreviewBubble(): Locator {
+    return this.templateDialog.locator('.chat-bubble')
+  }
+
+  getTemplatePreviewButtons(): Locator {
+    return this.templateDialog.locator('.interactive-buttons > div')
   }
 
   // Toast helpers

@@ -36,6 +36,9 @@ type ContactResponse struct {
 	LastMessagePreview string     `json:"last_message_preview"`
 	UnreadCount        int        `json:"unread_count"`
 	AssignedUserID     *uuid.UUID `json:"assigned_user_id,omitempty"`
+	WhatsAppAccount    string     `json:"whatsapp_account,omitempty"`
+	LastInboundAt      *time.Time `json:"last_inbound_at,omitempty"`
+	ServiceWindowOpen  bool       `json:"service_window_open"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
@@ -58,6 +61,7 @@ type MessageResponse struct {
 	ReplyToMessageID *string              `json:"reply_to_message_id,omitempty"`
 	ReplyToMessage   *ReplyPreview        `json:"reply_to_message,omitempty"`
 	Reactions        []ReactionInfo       `json:"reactions,omitempty"`
+	WhatsAppAccount  string               `json:"whatsapp_account,omitempty"`
 	CreatedAt        time.Time            `json:"created_at"`
 	UpdatedAt        time.Time            `json:"updated_at"`
 }
@@ -168,6 +172,8 @@ func (a *App) ListContacts(r *fastglue.Request) error {
 			profileName = MaskIfPhoneNumber(profileName)
 		}
 
+		serviceWindowOpen := c.LastInboundAt != nil && time.Since(*c.LastInboundAt) < 24*time.Hour
+
 		response[i] = ContactResponse{
 			ID:                 c.ID,
 			PhoneNumber:        phoneNumber,
@@ -180,6 +186,9 @@ func (a *App) ListContacts(r *fastglue.Request) error {
 			LastMessagePreview: c.LastMessagePreview,
 			UnreadCount:        int(unreadCount),
 			AssignedUserID:     c.AssignedUserID,
+			WhatsAppAccount:    c.WhatsAppAccount,
+			LastInboundAt:      c.LastInboundAt,
+			ServiceWindowOpen:  serviceWindowOpen,
 			CreatedAt:          c.CreatedAt,
 			UpdatedAt:          c.UpdatedAt,
 		}
@@ -252,6 +261,7 @@ func (a *App) GetContact(r *fastglue.Request) error {
 		LastMessagePreview: contact.LastMessagePreview,
 		UnreadCount:        int(unreadCount),
 		AssignedUserID:     contact.AssignedUserID,
+		WhatsAppAccount:    contact.WhatsAppAccount,
 		CreatedAt:          contact.CreatedAt,
 		UpdatedAt:          contact.UpdatedAt,
 	}
@@ -294,6 +304,12 @@ func (a *App) GetMessages(r *fastglue.Request) error {
 
 	// Build base query
 	msgQuery := a.DB.Where("contact_id = ?", contactID)
+
+	// Filter by WhatsApp account if specified
+	accountFilter := string(r.RequestCtx.QueryArgs().Peek("account"))
+	if accountFilter != "" {
+		msgQuery = msgQuery.Where("whats_app_account = ?", accountFilter)
+	}
 
 	// Check if user without contacts:read should only see current conversation
 	if !hasContactsReadPermission {
@@ -406,6 +422,7 @@ func (a *App) buildMessagesResponse(messages []models.Message) []MessageResponse
 			WAMID:           m.WhatsAppMessageID,
 			Error:           m.ErrorMessage,
 			IsReply:         m.IsReply,
+			WhatsAppAccount: m.WhatsAppAccount,
 			CreatedAt:       m.CreatedAt,
 			UpdatedAt:       m.UpdatedAt,
 		}
@@ -460,8 +477,7 @@ func (a *App) markMessagesAsRead(orgID uuid.UUID, contactID uuid.UUID, contact *
 	a.DB.Model(contact).Update("is_read", true)
 
 	if len(unreadMessages) > 0 && contact.WhatsAppAccount != "" {
-		account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount)
-		if err == nil {
+		if account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount); err == nil {
 			if account.AutoReadReceipt {
 				a.wg.Add(1)
 				go func() {
@@ -496,6 +512,7 @@ type SendMessageRequest struct {
 		Body string `json:"body"`
 	} `json:"content"`
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	WhatsAppAccount  string `json:"whatsapp_account,omitempty"`
 
 	// Interactive message fields (for type="interactive")
 	Interactive *InteractiveContent `json:"interactive,omitempty"`
@@ -544,8 +561,12 @@ func (a *App) SendMessage(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Contact not found", nil, "")
 	}
 
-	// Get WhatsApp account
-	account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount)
+	// Get WhatsApp account - prefer request-specified account over contact default
+	accountName := contact.WhatsAppAccount
+	if req.WhatsAppAccount != "" {
+		accountName = req.WhatsAppAccount
+	}
+	account, err := a.resolveWhatsAppAccount(orgID, accountName)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Failed to resolve WhatsApp account", nil, "")
 	}
@@ -612,6 +633,7 @@ func (a *App) SendMessage(r *fastglue.Request) error {
 		InteractiveData: message.InteractiveData,
 		Status:          message.Status,
 		IsReply:         message.IsReply,
+		WhatsAppAccount: message.WhatsAppAccount,
 		CreatedAt:       message.CreatedAt,
 		UpdatedAt:       message.UpdatedAt,
 	}
@@ -652,6 +674,16 @@ func (a *App) resolveWhatsAppAccount(orgID uuid.UUID, accountName string) (*mode
 	}
 	a.decryptAccountSecrets(&account)
 	return &account, nil
+}
+
+// resolveWhatsAppAccountByID fetches a WhatsApp account by UUID and org, decrypts secrets.
+func (a *App) resolveWhatsAppAccountByID(r *fastglue.Request, id, orgID uuid.UUID) (*models.WhatsAppAccount, error) {
+	account, err := findByIDAndOrg[models.WhatsAppAccount](a.DB, r, id, orgID, "Account")
+	if err != nil {
+		return nil, err
+	}
+	a.decryptAccountSecrets(account)
+	return account, nil
 }
 
 func truncateString(s string, maxLen int) string {
@@ -696,6 +728,12 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 		caption = captionValues[0]
 	}
 
+	// Get WhatsApp account override (optional)
+	formWhatsAppAccount := ""
+	if accountValues := form.Value["whatsapp_account"]; len(accountValues) > 0 {
+		formWhatsAppAccount = accountValues[0]
+	}
+
 	// Get uploaded file
 	files := form.File["file"]
 	if len(files) == 0 {
@@ -732,10 +770,14 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Contact not found", nil, "")
 	}
 
-	// Get WhatsApp account
-	account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount)
+	// Get WhatsApp account - prefer form-specified account over contact default
+	mediaAccountName := contact.WhatsAppAccount
+	if formWhatsAppAccount != "" {
+		mediaAccountName = formWhatsAppAccount
+	}
+	account, err := a.resolveWhatsAppAccount(orgID, mediaAccountName)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Failed to resolve WhatsApp account", nil, "")
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
 	}
 
 	// Save file locally first
@@ -769,17 +811,18 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 	}
 
 	response := MessageResponse{
-		ID:            message.ID,
-		ContactID:     message.ContactID,
-		Direction:     message.Direction,
-		MessageType:   message.MessageType,
-		Content:       map[string]string{"body": message.Content},
-		MediaURL:      message.MediaURL,
-		MediaMimeType: message.MediaMimeType,
-		MediaFilename: message.MediaFilename,
-		Status:        message.Status,
-		CreatedAt:     message.CreatedAt,
-		UpdatedAt:     message.UpdatedAt,
+		ID:              message.ID,
+		ContactID:       message.ContactID,
+		Direction:       message.Direction,
+		MessageType:     message.MessageType,
+		Content:         map[string]string{"body": message.Content},
+		MediaURL:        message.MediaURL,
+		MediaMimeType:   message.MediaMimeType,
+		MediaFilename:   message.MediaFilename,
+		Status:          message.Status,
+		WhatsAppAccount: message.WhatsAppAccount,
+		CreatedAt:       message.CreatedAt,
+		UpdatedAt:       message.UpdatedAt,
 	}
 
 	return r.SendEnvelope(response)
@@ -877,10 +920,14 @@ func (a *App) SendReaction(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Message not found", nil, "")
 	}
 
-	// Get WhatsApp account
-	account, err := a.resolveWhatsAppAccount(orgID, contact.WhatsAppAccount)
+	// Get WhatsApp account from the message being reacted to (not from contact, which may be stale)
+	reactionAccountName := message.WhatsAppAccount
+	if reactionAccountName == "" {
+		reactionAccountName = contact.WhatsAppAccount
+	}
+	account, err := a.resolveWhatsAppAccount(orgID, reactionAccountName)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Failed to resolve WhatsApp account", nil, "")
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
 	}
 
 	// Parse existing reactions from Metadata
@@ -1567,6 +1614,9 @@ func (a *App) buildContactResponse(contact *models.Contact, orgID uuid.UUID) Con
 		profileName = MaskIfPhoneNumber(profileName)
 	}
 
+	// 24-hour service window: open if customer messaged within the last 24 hours.
+	serviceWindowOpen := contact.LastInboundAt != nil && time.Since(*contact.LastInboundAt) < 24*time.Hour
+
 	return ContactResponse{
 		ID:                 contact.ID,
 		PhoneNumber:        phoneNumber,
@@ -1579,6 +1629,9 @@ func (a *App) buildContactResponse(contact *models.Contact, orgID uuid.UUID) Con
 		LastMessagePreview: contact.LastMessagePreview,
 		UnreadCount:        int(unreadCount),
 		AssignedUserID:     contact.AssignedUserID,
+		WhatsAppAccount:    contact.WhatsAppAccount,
+		LastInboundAt:      contact.LastInboundAt,
+		ServiceWindowOpen:  serviceWindowOpen,
 		CreatedAt:          contact.CreatedAt,
 		UpdatedAt:          contact.UpdatedAt,
 	}

@@ -368,6 +368,11 @@ export class ChatbotFlowBuilderPage extends BasePage {
     return this.page.getByRole('button', { name: /^URL$/ })
   }
 
+  /** Get the "Phone" add-button in the buttons config section */
+  get addPhoneButton() {
+    return this.page.getByRole('button', { name: /^Phone$/ })
+  }
+
   /** Get a button title input by index (0-based) */
   getButtonTitleInput(index: number) {
     return this.page.getByPlaceholder(/Button Title/i).nth(index)

@@ -16,7 +16,6 @@ import { useUsersStore, type User } from '@/stores/users'
 import { useAuthStore } from '@/stores/auth'
 import { useRolesStore } from '@/stores/roles'
 import { useOrganizationsStore } from '@/stores/organizations'
-import { organizationsService } from '@/services/api'
 import { toast } from 'vue-sonner'
 import { Plus, Pencil, Trash2, UserMinus, User as UserIcon, Shield, ShieldCheck, UserCog, Users, Link, UserPlus, Loader2 } from 'lucide-vue-next'
 import { useCrudState } from '@/composables/useCrudState'
@@ -201,7 +200,7 @@ async function submitAddExisting() {
   }
   isAddExistingSubmitting.value = true
   try {
-    await organizationsService.addMember({
+    await organizationsStore.addMember({
       email: addExistingEmail.value.trim(),
       role_id: addExistingRoleId.value || undefined,
     })
@@ -217,7 +216,8 @@ async function submitAddExisting() {
 
 function copyInviteLink() {
   const orgId = organizationsStore.selectedOrgId || authStore.organizationId
-  const url = `${window.location.origin}/register?org=${orgId}`
+  const basePath = ((window as any).__BASE_PATH__ ?? '').replace(/\/$/, '')
+  const url = `${window.location.origin}${basePath}/register?org=${orgId}`
   navigator.clipboard.writeText(url)
   toast.success(t('users.inviteLinkCopied'))
 }
