@@ -67,7 +67,7 @@ const palette: { type: IVRNodeType; label: string; icon: any; color: string }[] 
 // Vue Flow instance
 const { nodes, edges, addNodes, addEdges, removeNodes, removeEdges, onConnect, project, fitView } = useVueFlow({
   defaultEdgeOptions: {
-    type: 'smoothstep',
+    type: 'default',
     animated: true,
     markerEnd: MarkerType.ArrowClosed,
   },
@@ -107,7 +107,7 @@ function addNodeFromPalette(type: IVRNodeType) {
     http_callback: { url: '', method: 'GET', headers: {}, body_template: '', timeout_seconds: 10 },
     transfer: { team_id: '' },
     goto_flow: { flow_id: '' },
-    timing: { timezone: 'UTC', schedule: [
+    timing: { schedule: [
       { day: 'monday', enabled: true, start_time: '09:00', end_time: '17:00' },
       { day: 'tuesday', enabled: true, start_time: '09:00', end_time: '17:00' },
       { day: 'wednesday', enabled: true, start_time: '09:00', end_time: '17:00' },
@@ -143,12 +143,31 @@ onConnect((params) => {
 
   addEdges([{
     ...params,
-    type: 'smoothstep',
+    type: 'default',
     animated: true,
     markerEnd: MarkerType.ArrowClosed,
     label: params.sourceHandle || 'default',
   }])
+  spreadParallelLabels()
 })
+
+// Spread labels vertically when multiple edges share the same source→target.
+function spreadParallelLabels() {
+  const groups = new Map<string, Edge[]>()
+  for (const e of edges.value) {
+    const key = `${e.source}→${e.target}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(e)
+  }
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length; i++) {
+      const yOffset = group.length > 1 ? (i - (group.length - 1) / 2) * 22 : 0
+      group[i].labelStyle = { transform: `translateY(${yOffset}px)` }
+      group[i].labelBgStyle = { fill: 'none', fillOpacity: 0 }
+      group[i].labelBgPadding = [0, 0] as [number, number]
+    }
+  }
+}
 
 // Select edge on click (Backspace/Delete will remove it)
 function onEdgeClick({ edge }: EdgeMouseEvent) {
@@ -165,11 +184,12 @@ function onEdgeUpdate({ edge, connection }: { edge: Edge; connection: Connection
   removeEdges([edge])
   addEdges([{
     ...connection,
-    type: 'smoothstep',
+    type: 'default',
     animated: true,
     markerEnd: MarkerType.ArrowClosed,
     label: connection.sourceHandle || 'default',
   }])
+  spreadParallelLabels()
 }
 
 // Update node data from properties panel
@@ -255,7 +275,7 @@ function loadFlowData(data: IVRFlowData) {
     source: e.from,
     target: e.to,
     sourceHandle: e.condition,
-    type: 'smoothstep' as const,
+    type: 'default' as const,
     animated: true,
     markerEnd: MarkerType.ArrowClosed,
     label: e.condition !== 'default' ? e.condition : '',
@@ -263,6 +283,7 @@ function loadFlowData(data: IVRFlowData) {
 
   addNodes(vfNodes)
   addEdges(vfEdges)
+  spreadParallelLabels()
 
   setTimeout(() => fitView({ padding: 0.2 }), 100)
 }
@@ -424,3 +445,4 @@ onMounted(async () => {
     </div>
   </div>
 </template>
+

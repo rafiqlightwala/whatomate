@@ -491,18 +491,7 @@ func (m *Manager) executeGotoFlow(session *CallSession, node *IVRNode, ctx *IVRC
 
 // executeTiming branches based on business hours schedule.
 func (m *Manager) executeTiming(session *CallSession, node *IVRNode) string {
-	tz, _ := node.Config["timezone"].(string)
-	if tz == "" {
-		tz = "UTC"
-	}
-
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		m.log.Error("Invalid timezone", "error", err, "call_id", session.ID, "timezone", tz)
-		return "out_of_hours"
-	}
-
-	now := time.Now().In(loc)
+	now := time.Now()
 	dayName := strings.ToLower(now.Weekday().String())
 
 	scheduleRaw, _ := node.Config["schedule"].([]interface{})

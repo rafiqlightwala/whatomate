@@ -9,10 +9,9 @@ const props = defineProps<{ data: Record<string, any> }>()
 
 const summary = computed(() => {
   const c = props.data?.config || {}
-  const tz = c.timezone || 'UTC'
   const schedule = c.schedule || []
   const activeDays = schedule.filter((s: any) => s.enabled).length
-  return `${tz} (${activeDays}/7 days)`
+  return `${activeDays}/7 days active`
 })
 
 const outputHandles = [
