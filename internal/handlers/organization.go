@@ -146,6 +146,10 @@ func (a *App) UpdateOrganizationSettings(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update settings", nil, "")
 	}
 
+	if a.CallManager != nil {
+		a.CallManager.InvalidateOrgCallingSettingsCache(orgID)
+	}
+
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Settings updated successfully",
 	})

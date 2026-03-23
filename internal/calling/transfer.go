@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
+	"github.com/shridarpatil/whatomate/internal/assignment"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/internal/websocket"
 )
@@ -74,45 +75,40 @@ func (m *Manager) initiateTransfer(session *CallSession, waAccount string, teamT
 	session.TransferStatus = models.CallTransferStatusWaiting
 	session.mu.Unlock()
 
-	// Start timeout goroutine
-	transferTimeout := orgSettings.TransferTimeoutSecs
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(transferTimeout)*time.Second)
+	if teamID != nil {
+		// Team transfer: use rotation (per-agent timeout with fallback)
+		session.mu.Lock()
+		session.TransferAccepted = make(chan struct{})
+		session.mu.Unlock()
 
-	session.mu.Lock()
-	session.TransferCancel = cancel
-	session.mu.Unlock()
+		go m.runTransferRotation(session, transfer, orgSettings)
+	} else {
+		// No team: broadcast to entire org with simple timeout
+		transferTimeout := orgSettings.TransferTimeoutSecs
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(transferTimeout)*time.Second)
 
-	go m.waitForTransferTimeout(ctx, session, transfer.ID)
+		session.mu.Lock()
+		session.TransferCancel = cancel
+		session.mu.Unlock()
 
-	// Broadcast WebSocket event
+		go m.waitForTransferTimeout(ctx, session, transfer.ID)
+
+		payload := map[string]any{
+			"id":               transfer.ID.String(),
+			"call_log_id":      transfer.CallLogID.String(),
+			"whatsapp_call_id": transfer.WhatsAppCallID,
+			"caller_phone":     transfer.CallerPhone,
+			"contact_id":       transfer.ContactID.String(),
+			"whatsapp_account": transfer.WhatsAppAccount,
+			"transferred_at":   transfer.TransferredAt.Format(time.RFC3339),
+		}
+		m.broadcastEvent(transfer.OrganizationID, websocket.TypeCallTransferWaiting, payload)
+	}
+
 	var teamIDStr string
 	if teamID != nil {
 		teamIDStr = teamID.String()
 	}
-
-	payload := map[string]any{
-		"id":               transfer.ID.String(),
-		"call_log_id":      transfer.CallLogID.String(),
-		"whatsapp_call_id": transfer.WhatsAppCallID,
-		"caller_phone":     transfer.CallerPhone,
-		"contact_id":       transfer.ContactID.String(),
-		"whatsapp_account": transfer.WhatsAppAccount,
-		"team_id":          teamIDStr,
-		"transferred_at":   transfer.TransferredAt.Format(time.RFC3339),
-	}
-	msg := websocket.WSMessage{
-		Type:    websocket.TypeCallTransferWaiting,
-		Payload: payload,
-	}
-
-	if teamID != nil {
-		// Team-scoped: notify only team members
-		m.broadcastToTeam(transfer.OrganizationID, *teamID, msg)
-	} else {
-		// No team: notify entire org
-		m.broadcastEvent(transfer.OrganizationID, websocket.TypeCallTransferWaiting, payload)
-	}
-
 	m.log.Info("Call transfer initiated",
 		"call_id", session.ID,
 		"transfer_id", transfer.ID,
@@ -268,50 +264,66 @@ func (m *Manager) InitiateAgentTransfer(callLogID, initiatingAgentID uuid.UUID, 
 	session.TransferID = transfer.ID
 	session.mu.Unlock()
 
-	// Start timeout goroutine
-	transferTimeout := orgSettings.TransferTimeoutSecs
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(transferTimeout)*time.Second)
+	if targetAgentID != nil {
+		// Direct transfer to specific agent: simple timeout + notify
+		transferTimeout := orgSettings.TransferTimeoutSecs
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(transferTimeout)*time.Second)
 
-	session.mu.Lock()
-	session.TransferCancel = cancel
-	session.mu.Unlock()
+		session.mu.Lock()
+		session.TransferCancel = cancel
+		session.mu.Unlock()
 
-	go m.waitForTransferTimeout(ctx, session, transfer.ID)
+		go m.waitForTransferTimeout(ctx, session, transfer.ID)
 
-	// Broadcast WebSocket event
+		payload := map[string]any{
+			"id":                  transfer.ID.String(),
+			"call_log_id":        transfer.CallLogID.String(),
+			"whatsapp_call_id":   transfer.WhatsAppCallID,
+			"caller_phone":       transfer.CallerPhone,
+			"contact_id":         transfer.ContactID.String(),
+			"whatsapp_account":   transfer.WhatsAppAccount,
+			"initiating_agent_id": initiatingAgentID.String(),
+			"transferred_at":     transfer.TransferredAt.Format(time.RFC3339),
+		}
+		m.wsHub.BroadcastToUser(session.OrganizationID, *targetAgentID, websocket.WSMessage{
+			Type:    websocket.TypeCallTransferWaiting,
+			Payload: payload,
+		})
+	} else if teamID != nil {
+		// Team transfer: use rotation (per-agent timeout with fallback)
+		session.mu.Lock()
+		session.TransferAccepted = make(chan struct{})
+		session.mu.Unlock()
+
+		go m.runTransferRotation(session, transfer, orgSettings)
+	} else {
+		// No target: broadcast to entire org with simple timeout
+		transferTimeout := orgSettings.TransferTimeoutSecs
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(transferTimeout)*time.Second)
+
+		session.mu.Lock()
+		session.TransferCancel = cancel
+		session.mu.Unlock()
+
+		go m.waitForTransferTimeout(ctx, session, transfer.ID)
+
+		payload := map[string]any{
+			"id":                  transfer.ID.String(),
+			"call_log_id":        transfer.CallLogID.String(),
+			"whatsapp_call_id":   transfer.WhatsAppCallID,
+			"caller_phone":       transfer.CallerPhone,
+			"contact_id":         transfer.ContactID.String(),
+			"whatsapp_account":   transfer.WhatsAppAccount,
+			"initiating_agent_id": initiatingAgentID.String(),
+			"transferred_at":     transfer.TransferredAt.Format(time.RFC3339),
+		}
+		m.broadcastEvent(session.OrganizationID, websocket.TypeCallTransferWaiting, payload)
+	}
+
 	var teamIDStr string
 	if teamID != nil {
 		teamIDStr = teamID.String()
 	}
-
-	payload := map[string]any{
-		"id":                  transfer.ID.String(),
-		"call_log_id":        transfer.CallLogID.String(),
-		"whatsapp_call_id":   transfer.WhatsAppCallID,
-		"caller_phone":       transfer.CallerPhone,
-		"contact_id":         transfer.ContactID.String(),
-		"whatsapp_account":   transfer.WhatsAppAccount,
-		"team_id":            teamIDStr,
-		"initiating_agent_id": initiatingAgentID.String(),
-		"transferred_at":     transfer.TransferredAt.Format(time.RFC3339),
-	}
-
-	msg := websocket.WSMessage{
-		Type:    websocket.TypeCallTransferWaiting,
-		Payload: payload,
-	}
-
-	if targetAgentID != nil {
-		// Direct transfer: notify only the target agent
-		m.wsHub.BroadcastToUser(session.OrganizationID, *targetAgentID, msg)
-	} else if teamID != nil {
-		// Team transfer: notify only team members
-		m.broadcastToTeam(session.OrganizationID, *teamID, msg)
-	} else {
-		// No target: notify entire org
-		m.broadcastEvent(session.OrganizationID, websocket.TypeCallTransferWaiting, payload)
-	}
-
 	m.log.Info("Agent-initiated call transfer started",
 		"call_id", session.ID,
 		"transfer_id", transfer.ID,
@@ -338,7 +350,18 @@ func (m *Manager) ConnectAgentToTransfer(transferID, agentID uuid.UUID, sdpOffer
 	}
 	// Claim the transfer atomically so a second agent gets rejected
 	session.TransferStatus = models.CallTransferStatusConnected
+	// Signal rotation goroutine to stop (no-op if not using rotation)
+	if session.TransferAccepted != nil {
+		safeClose(session.TransferAccepted)
+	}
 	session.mu.Unlock()
+
+	// Broadcast immediately so other agents' UI removes this transfer before
+	// the WebRTC setup completes (which can take several seconds).
+	m.broadcastEvent(session.OrganizationID, websocket.TypeCallTransferConnected, map[string]any{
+		"id":       transferID.String(),
+		"agent_id": agentID.String(),
+	})
 
 	// Create PeerConnection for agent (reuses same codec config)
 	agentPC, err := m.createPeerConnection()
@@ -483,13 +506,6 @@ func (m *Manager) completeTransferConnection(session *CallSession, transferID, a
 	agentLocal := session.AgentAudioTrack
 	session.mu.Unlock()
 
-	// Broadcast connected event
-	m.broadcastEvent(session.OrganizationID, websocket.TypeCallTransferConnected, map[string]any{
-		"id":           transferID.String(),
-		"agent_id":     agentID.String(),
-		"connected_at": now.Format(time.RFC3339),
-	})
-
 	m.log.Info("Call transfer connected",
 		"transfer_id", transferID,
 		"agent_id", agentID,
@@ -620,7 +636,188 @@ func (m *Manager) EndTransfer(transferID uuid.UUID) {
 	}
 }
 
+// runTransferRotation implements per-agent timeout rotation for team transfers.
+// It assigns agents one at a time using the team's assignment strategy, waiting
+// PerAgentTimeoutSecs for each. If all agents are exhausted, it falls back to
+// broadcasting to the remaining team members.
+func (m *Manager) runTransferRotation(session *CallSession, transfer models.CallTransfer, orgSettings orgCallingSettings) {
+	teamID := *transfer.TeamID
+	orgID := transfer.OrganizationID
+	triedAgents := []uuid.UUID{}
+
+	// Resolve per-agent timeout: team > global default
+	teamCfg := m.assigner.GetTeamConfig(teamID)
+	teamTimeout := 0
+	if teamCfg != nil {
+		teamTimeout = teamCfg.PerAgentTimeoutSecs
+	}
+	perAgentSecs := assignment.ResolvePerAgentTimeout(teamTimeout, 0, m.config.PerAgentTimeoutSecs)
+	perAgentTimeout := time.Duration(perAgentSecs) * time.Second
+
+	// Total deadline for the entire transfer
+	totalDeadline := time.Now().Add(time.Duration(orgSettings.TransferTimeoutSecs) * time.Second)
+	totalCtx, totalCancel := context.WithDeadline(context.Background(), totalDeadline)
+	defer totalCancel()
+
+	session.mu.Lock()
+	session.TransferCancel = totalCancel
+	session.mu.Unlock()
+
+	// Build the base WS payload once
+	basePayload := map[string]any{
+		"id":               transfer.ID.String(),
+		"call_log_id":      transfer.CallLogID.String(),
+		"whatsapp_call_id": transfer.WhatsAppCallID,
+		"caller_phone":     transfer.CallerPhone,
+		"contact_id":       transfer.ContactID.String(),
+		"whatsapp_account": transfer.WhatsAppAccount,
+		"team_id":          teamID.String(),
+		"transferred_at":   transfer.TransferredAt.Format(time.RFC3339),
+	}
+	if transfer.InitiatingAgentID != nil {
+		basePayload["initiating_agent_id"] = transfer.InitiatingAgentID.String()
+	}
+
+	for {
+		// Check if total timeout exceeded or transfer already claimed
+		if totalCtx.Err() != nil {
+			break
+		}
+		session.mu.Lock()
+		status := session.TransferStatus
+		session.mu.Unlock()
+		if status != models.CallTransferStatusWaiting {
+			return // Transfer was accepted or abandoned
+		}
+
+		// Try to assign the next agent
+		agentID := m.assigner.AssignToTeam(teamID, orgID, triedAgents, assignment.CallLoadCounter)
+		if agentID == nil {
+			// No more agents available — break to fallback
+			break
+		}
+
+		triedAgents = append(triedAgents, *agentID)
+
+		// Update DB: set agent_id and tried_agent_ids
+		triedIDs := make(models.JSONBArray, len(triedAgents))
+		for i, id := range triedAgents {
+			triedIDs[i] = id.String()
+		}
+		m.db.Model(&models.CallTransfer{}).Where("id = ?", transfer.ID).Updates(map[string]any{
+			"agent_id":        agentID,
+			"tried_agent_ids": triedIDs,
+		})
+
+		// Notify this specific agent
+		agentPayload := make(map[string]any, len(basePayload)+2)
+		for k, v := range basePayload {
+			agentPayload[k] = v
+		}
+		agentPayload["assigned_to_you"] = true
+		agentPayload["agent_id"] = agentID.String()
+		m.wsHub.BroadcastToUser(orgID, *agentID, websocket.WSMessage{
+			Type:    websocket.TypeCallTransferWaiting,
+			Payload: agentPayload,
+		})
+
+		m.log.Info("Rotation: assigned call transfer to agent",
+			"transfer_id", transfer.ID,
+			"agent_id", *agentID,
+			"attempt", len(triedAgents),
+		)
+
+		// Wait for per-agent timeout, acceptance, or total timeout
+		agentTimer := time.NewTimer(perAgentTimeout)
+		session.mu.Lock()
+		accepted := session.TransferAccepted
+		session.mu.Unlock()
+
+		select {
+		case <-agentTimer.C:
+			// Agent didn't accept — notify them and move on
+			m.wsHub.BroadcastToUser(orgID, *agentID, websocket.WSMessage{
+				Type: websocket.TypeCallTransferReassigned,
+				Payload: map[string]any{
+					"id":     transfer.ID.String(),
+					"reason": "timeout",
+				},
+			})
+			// Clear agent_id so next iteration sets the new one
+			m.db.Model(&models.CallTransfer{}).Where("id = ?", transfer.ID).
+				Update("agent_id", nil)
+			continue
+
+		case <-accepted:
+			// Agent accepted — rotation is done
+			agentTimer.Stop()
+			return
+
+		case <-totalCtx.Done():
+			agentTimer.Stop()
+			// Notify current agent the transfer moved on
+			m.wsHub.BroadcastToUser(orgID, *agentID, websocket.WSMessage{
+				Type: websocket.TypeCallTransferReassigned,
+				Payload: map[string]any{
+					"id":     transfer.ID.String(),
+					"reason": "total_timeout",
+				},
+			})
+			// Clear agent_id before fallback
+			m.db.Model(&models.CallTransfer{}).Where("id = ?", transfer.ID).
+				Update("agent_id", nil)
+		}
+		break // Exit loop on totalCtx.Done
+	}
+
+	// Check if transfer was already accepted while we were breaking out
+	session.mu.Lock()
+	status := session.TransferStatus
+	session.mu.Unlock()
+	if status != models.CallTransferStatusWaiting {
+		return
+	}
+
+	// Fallback: broadcast to all remaining available team members
+	remaining := m.assigner.GetAvailableAgents(teamID, triedAgents)
+	if len(remaining) > 0 {
+		// Clear agent_id so any team member can accept
+		m.db.Model(&models.CallTransfer{}).Where("id = ?", transfer.ID).
+			Update("agent_id", nil)
+
+		fallbackPayload := make(map[string]any, len(basePayload)+1)
+		for k, v := range basePayload {
+			fallbackPayload[k] = v
+		}
+		fallbackPayload["broadcast_fallback"] = true
+		m.wsHub.BroadcastToUsers(orgID, remaining, websocket.WSMessage{
+			Type:    websocket.TypeCallTransferWaiting,
+			Payload: fallbackPayload,
+		})
+
+		m.log.Info("Rotation exhausted, broadcasting to remaining team",
+			"transfer_id", transfer.ID,
+			"remaining_agents", len(remaining),
+		)
+	}
+
+	// Wait for total timeout or acceptance
+	session.mu.Lock()
+	accepted := session.TransferAccepted
+	session.mu.Unlock()
+
+	select {
+	case <-accepted:
+		return // Someone accepted during fallback
+	case <-totalCtx.Done():
+		if totalCtx.Err() == context.DeadlineExceeded {
+			m.handleTransferNoAnswer(session, transfer.ID)
+		}
+	}
+}
+
 // waitForTransferTimeout marks the transfer as no_answer if nobody accepts in time.
+// Used for non-team transfers (org-wide broadcast, direct agent transfers).
 func (m *Manager) waitForTransferTimeout(ctx context.Context, session *CallSession, transferID uuid.UUID) {
 	<-ctx.Done()
 
@@ -629,6 +826,12 @@ func (m *Manager) waitForTransferTimeout(ctx context.Context, session *CallSessi
 		return
 	}
 
+	m.handleTransferNoAnswer(session, transferID)
+}
+
+// handleTransferNoAnswer performs the no_answer cleanup: updates DB, stops hold
+// music, broadcasts the event, and signals the IVR loop or cleans up the session.
+func (m *Manager) handleTransferNoAnswer(session *CallSession, transferID uuid.UUID) {
 	session.mu.Lock()
 	if session.TransferStatus != models.CallTransferStatusWaiting {
 		session.mu.Unlock()
@@ -715,7 +918,7 @@ func (m *Manager) HandleCallerHangupDuringTransfer(session *CallSession) {
 		Where("id = ?", session.CallLogID).
 		Update("disconnected_by", models.DisconnectedByClient)
 
-	// Stop hold music and cancel timeout
+	// Stop hold music, cancel timeout, and signal rotation goroutine
 	session.mu.Lock()
 	session.TransferStatus = models.CallTransferStatusAbandoned
 	if session.HoldPlayer != nil {
@@ -723,6 +926,9 @@ func (m *Manager) HandleCallerHangupDuringTransfer(session *CallSession) {
 	}
 	if session.TransferCancel != nil {
 		session.TransferCancel()
+	}
+	if session.TransferAccepted != nil {
+		safeClose(session.TransferAccepted)
 	}
 	session.mu.Unlock()
 

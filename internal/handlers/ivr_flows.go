@@ -159,6 +159,10 @@ func (a *App) CreateIVRFlow(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create IVR flow", nil, "")
 	}
 
+	if a.CallManager != nil {
+		a.CallManager.InvalidateIVRFlowCache(flow.ID, flow.OrganizationID, flow.WhatsAppAccount)
+	}
+
 	return r.SendEnvelope(flow)
 }
 
@@ -253,6 +257,11 @@ func (a *App) UpdateIVRFlow(r *fastglue.Request) error {
 
 	// Reload for response
 	a.DB.First(flow, flowID)
+
+	if a.CallManager != nil {
+		a.CallManager.InvalidateIVRFlowCache(flow.ID, flow.OrganizationID, flow.WhatsAppAccount)
+	}
+
 	return r.SendEnvelope(flow)
 }
 
@@ -279,6 +288,10 @@ func (a *App) DeleteIVRFlow(r *fastglue.Request) error {
 	if err := a.DB.Delete(flow).Error; err != nil {
 		a.Log.Error("Failed to delete IVR flow", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete IVR flow", nil, "")
+	}
+
+	if a.CallManager != nil {
+		a.CallManager.InvalidateIVRFlowCache(flow.ID, flow.OrganizationID, flow.WhatsAppAccount)
 	}
 
 	return r.SendEnvelope(map[string]string{"message": "IVR flow deleted"})

@@ -121,6 +121,7 @@ type CallTransfer struct {
 	HoldDuration    int                `gorm:"default:0" json:"hold_duration"`
 	TalkDuration    int                `gorm:"default:0" json:"talk_duration"`
 	IVRPath         JSONB              `gorm:"type:jsonb" json:"ivr_path,omitempty"`
+	TriedAgentIDs   JSONBArray         `gorm:"type:jsonb" json:"tried_agent_ids,omitempty"`
 	// Relations
 	CallLog         *CallLog `gorm:"foreignKey:CallLogID" json:"call_log,omitempty"`
 	Contact         *Contact `gorm:"foreignKey:ContactID" json:"contact,omitempty"`

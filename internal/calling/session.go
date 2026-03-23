@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
+	"github.com/redis/go-redis/v9"
+	"github.com/shridarpatil/whatomate/internal/assignment"
 	"github.com/shridarpatil/whatomate/internal/config"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/internal/storage"
@@ -53,6 +54,7 @@ type CallSession struct {
 	HoldPlayer        *AudioPlayer
 	TransferCancel    context.CancelFunc
 	BridgeStarted     chan struct{} // closed when bridge takes over caller track
+	TransferAccepted  chan struct{} // closed when an agent accepts the transfer (rotation signal)
 	TransferDone      chan string   // outcome sent when transfer ends; nil = terminal
 	LastRTPSeq        uint16       // last RTP seq from bridge, for post-transfer player
 	LastRTPTimestamp   uint32       // last RTP timestamp from bridge
@@ -172,10 +174,12 @@ type Manager struct {
 	wsHub    *websocket.Hub
 	config   *config.CallingConfig
 	s3       *storage.S3Client // nil when recording is disabled
+	redis    *redis.Client
+	assigner *assignment.Assigner
 }
 
 // NewManager creates a new call session manager
-func NewManager(cfg *config.CallingConfig, s3Client *storage.S3Client, db *gorm.DB, waClient *whatsapp.Client, wsHub *websocket.Hub, log logf.Logger) *Manager {
+func NewManager(cfg *config.CallingConfig, s3Client *storage.S3Client, db *gorm.DB, rd *redis.Client, waClient *whatsapp.Client, wsHub *websocket.Hub, assigner *assignment.Assigner, log logf.Logger) *Manager {
 	// Apply defaults for server-level config
 	if cfg.AudioDir == "" {
 		cfg.AudioDir = "./audio"
@@ -190,14 +194,20 @@ func NewManager(cfg *config.CallingConfig, s3Client *storage.S3Client, db *gorm.
 		cfg.TransferTimeoutSecs = 60
 	}
 
+	if cfg.PerAgentTimeoutSecs <= 0 {
+		cfg.PerAgentTimeoutSecs = 15
+	}
+
 	return &Manager{
 		sessions: make(map[string]*CallSession),
 		log:      log,
 		whatsapp: waClient,
 		db:       db,
+		redis:    rd,
 		wsHub:    wsHub,
 		config:   cfg,
 		s3:       s3Client,
+		assigner: assigner,
 	}
 }
 
@@ -218,12 +228,9 @@ func (m *Manager) HandleIncomingCall(account *models.WhatsAppAccount, contact *m
 		BridgeStarted:  make(chan struct{}),
 	}
 
-	// Load IVR flow if assigned
+	// Load IVR flow if assigned (cached)
 	if callLog.IVRFlowID != nil {
-		var flow models.IVRFlow
-		if err := m.db.First(&flow, callLog.IVRFlowID).Error; err == nil {
-			session.IVRFlow = &flow
-		}
+		session.IVRFlow = m.getIVRFlowCached(*callLog.IVRFlowID)
 	}
 
 	m.mu.Lock()
@@ -312,33 +319,10 @@ type orgCallingSettings struct {
 	RingbackFile        string
 }
 
-// getOrgCallingSettings loads org-level calling overrides with a single DB query,
+// getOrgCallingSettings returns cached org-level calling overrides,
 // falling back to global config defaults for any missing values.
 func (m *Manager) getOrgCallingSettings(orgID uuid.UUID) orgCallingSettings {
-	s := orgCallingSettings{
-		TransferTimeoutSecs: m.config.TransferTimeoutSecs,
-		HoldMusicFile:       filepath.Join(m.config.AudioDir, m.config.HoldMusicFile),
-	}
-	if m.config.RingbackFile != "" {
-		s.RingbackFile = filepath.Join(m.config.AudioDir, m.config.RingbackFile)
-	}
-
-	var org models.Organization
-	if err := m.db.Where("id = ?", orgID).First(&org).Error; err != nil || org.Settings == nil {
-		return s
-	}
-
-	if v, ok := org.Settings["transfer_timeout_secs"].(float64); ok && v > 0 {
-		s.TransferTimeoutSecs = int(v)
-	}
-	if v, ok := org.Settings["hold_music_file"].(string); ok && v != "" {
-		s.HoldMusicFile = filepath.Join(m.config.AudioDir, v)
-	}
-	if v, ok := org.Settings["ringback_file"].(string); ok && v != "" {
-		s.RingbackFile = filepath.Join(m.config.AudioDir, v)
-	}
-
-	return s
+	return m.getOrgCallingSettingsCached(orgID)
 }
 
 // getOrgRingback returns the ringback file path for a session's organization.
@@ -495,29 +479,6 @@ func (m *Manager) broadcastEvent(orgID uuid.UUID, eventType string, payload map[
 		Type:    eventType,
 		Payload: payload,
 	})
-}
-
-// broadcastToTeam sends a WebSocket message only to members of a specific team.
-func (m *Manager) broadcastToTeam(orgID, teamID uuid.UUID, msg websocket.WSMessage) {
-	if m.wsHub == nil {
-		return
-	}
-	var memberIDs []uuid.UUID
-	if err := m.db.Table("team_members").
-		Select("user_id").
-		Where("team_id = ? AND deleted_at IS NULL", teamID).
-		Pluck("user_id", &memberIDs).Error; err != nil {
-		m.log.Error("Failed to fetch team members for broadcast", "error", err, "team_id", teamID)
-		// Fall back to org-wide broadcast so the call isn't silently lost
-		m.wsHub.BroadcastToOrg(orgID, msg)
-		return
-	}
-	if len(memberIDs) == 0 {
-		// No members — broadcast to org so someone can pick up
-		m.wsHub.BroadcastToOrg(orgID, msg)
-		return
-	}
-	m.wsHub.BroadcastToUsers(orgID, memberIDs, msg)
 }
 
 // setupAudioBridge creates per-direction recorders (if enabled), builds an

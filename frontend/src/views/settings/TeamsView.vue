@@ -37,10 +37,11 @@ interface TeamFormData {
   name: string
   description: string
   assignment_strategy: 'round_robin' | 'load_balanced' | 'manual'
+  per_agent_timeout_secs: number
   is_active: boolean
 }
 
-const defaultFormData: TeamFormData = { name: '', description: '', assignment_strategy: 'round_robin', is_active: true }
+const defaultFormData: TeamFormData = { name: '', description: '', assignment_strategy: 'round_robin', per_agent_timeout_secs: 0, is_active: true }
 
 const {
   isLoading, isSubmitting, isDialogOpen, editingItem: editingTeam, deleteDialogOpen, itemToDelete: teamToDelete,
@@ -97,7 +98,7 @@ const sortKey = ref('name')
 const sortDirection = ref<'asc' | 'desc'>('asc')
 
 function openEditDialog(team: Team) {
-  baseOpenEditDialog(team, (t) => ({ name: t.name, description: t.description || '', assignment_strategy: t.assignment_strategy, is_active: t.is_active }))
+  baseOpenEditDialog(team, (t) => ({ name: t.name, description: t.description || '', assignment_strategy: t.assignment_strategy, per_agent_timeout_secs: t.per_agent_timeout_secs || 0, is_active: t.is_active }))
 }
 
 watch(() => organizationsStore.selectedOrgId, () => { fetchTeams(); usersStore.fetchUsers() })
@@ -122,10 +123,10 @@ async function saveTeam() {
   isSubmitting.value = true
   try {
     if (editingTeam.value) {
-      await teamsStore.updateTeam(editingTeam.value.id, { name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy, is_active: formData.value.is_active })
+      await teamsStore.updateTeam(editingTeam.value.id, { name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy, per_agent_timeout_secs: formData.value.per_agent_timeout_secs, is_active: formData.value.is_active })
       toast.success(t('common.updatedSuccess', { resource: t('resources.Team') }))
     } else {
-      await teamsStore.createTeam({ name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy })
+      await teamsStore.createTeam({ name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy, per_agent_timeout_secs: formData.value.per_agent_timeout_secs })
       toast.success(t('common.createdSuccess', { resource: t('resources.Team') }))
     }
     closeDialog()
@@ -242,6 +243,14 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
         <div class="space-y-2">
           <Label for="strategy">{{ $t('teams.assignmentStrategy') }}</Label>
           <Select v-model="formData.assignment_strategy"><SelectTrigger><SelectValue :placeholder="$t('teams.selectStrategy')" /></SelectTrigger><SelectContent><SelectItem value="round_robin"><div class="flex items-center gap-2"><RotateCcw class="h-4 w-4" />{{ $t('teams.roundRobin') }}</div></SelectItem><SelectItem value="load_balanced"><div class="flex items-center gap-2"><Scale class="h-4 w-4" />{{ $t('teams.loadBalanced') }}</div></SelectItem><SelectItem value="manual"><div class="flex items-center gap-2"><Hand class="h-4 w-4" />{{ $t('teams.manualQueue') }}</div></SelectItem></SelectContent></Select>
+        </div>
+        <div v-if="formData.assignment_strategy !== 'manual'" class="space-y-2">
+          <Label for="per_agent_timeout">{{ $t('teams.perAgentTimeout') }}</Label>
+          <div class="flex items-center gap-2">
+            <Input id="per_agent_timeout" v-model.number="formData.per_agent_timeout_secs" type="number" min="0" max="300" :placeholder="$t('teams.perAgentTimeoutPlaceholder')" class="w-32" />
+            <span class="text-sm text-muted-foreground">{{ $t('teams.seconds') }}</span>
+          </div>
+          <p class="text-xs text-muted-foreground">{{ $t('teams.perAgentTimeoutHint') }}</p>
         </div>
         <div v-if="editingTeam" class="flex items-center justify-between"><Label for="is_active" class="font-normal cursor-pointer">{{ $t('teams.teamActive') }}</Label><Switch id="is_active" :checked="formData.is_active" @update:checked="formData.is_active = $event" /></div>
       </div>

@@ -111,8 +111,10 @@ func (a *App) ConnectCallTransfer(r *fastglue.Request) error {
 	// This avoids claiming and then reverting, which creates a window where
 	// the transfer is stuck as "connected" with no agent.
 
-	// If transfer is directed to a specific agent, reject other agents
-	if transfer.AgentID != nil && *transfer.AgentID != userID {
+	// If transfer is directed to a specific agent (no team), reject other agents.
+	// For team transfers with rotation, any team member can accept — the atomic
+	// UPDATE below is the sole concurrency guard.
+	if transfer.AgentID != nil && *transfer.AgentID != userID && transfer.TeamID == nil {
 		return r.SendErrorEnvelope(fasthttp.StatusForbidden,
 			"This transfer is directed to a specific agent", nil, "")
 	}

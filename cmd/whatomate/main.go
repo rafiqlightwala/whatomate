@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/shridarpatil/whatomate/internal/assignment"
 	"github.com/shridarpatil/whatomate/internal/calling"
 	"github.com/shridarpatil/whatomate/internal/config"
 	"github.com/shridarpatil/whatomate/internal/storage"
@@ -210,8 +211,12 @@ func runServer(args []string) {
 		}
 	}
 
+	// Initialize shared assignment engine (used by both chat and call transfers)
+	assigner := assignment.New(db, rdb, lo)
+	app.Assigner = assigner
+
 	// Initialize CallManager (per-org calling_enabled DB setting controls access)
-	app.CallManager = calling.NewManager(&cfg.Calling, s3Client, db, waClient, wsHub, lo)
+	app.CallManager = calling.NewManager(&cfg.Calling, s3Client, db, rdb, waClient, wsHub, assigner, lo)
 	app.S3Client = s3Client
 	lo.Info("Call manager initialized")
 

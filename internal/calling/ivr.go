@@ -502,12 +502,13 @@ func (m *Manager) executeGotoFlow(session *CallSession, node *IVRNode, ctx *IVRC
 		return
 	}
 
-	var targetFlow models.IVRFlow
-	if err := m.db.First(&targetFlow, targetFlowID).Error; err != nil {
-		m.log.Error("Failed to load goto_flow target", "error", err, "call_id", session.ID, "flow_id", flowID)
+	targetFlowPtr := m.getIVRFlowCached(targetFlowID)
+	if targetFlowPtr == nil {
+		m.log.Error("Failed to load goto_flow target", "call_id", session.ID, "flow_id", flowID)
 		m.saveIVRPath(session, ctx.Path)
 		return
 	}
+	targetFlow := *targetFlowPtr
 
 	if !targetFlow.IsActive {
 		m.log.Warn("goto_flow target is disabled", "call_id", session.ID, "flow_id", flowID)

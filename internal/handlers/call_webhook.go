@@ -254,11 +254,9 @@ func (a *App) getOrCreateCallLog(account *models.WhatsAppAccount, contact *model
 		StartedAt:       &now,
 	}
 
-	// Find the call-start IVR flow for this account (must also be enabled)
-	var ivrFlow models.IVRFlow
-	if err := a.DB.Where("organization_id = ? AND whatsapp_account = ? AND is_call_start = ? AND is_active = ? AND deleted_at IS NULL",
-		account.OrganizationID, account.Name, true, true).First(&ivrFlow).Error; err == nil {
-		callLog.IVRFlowID = &ivrFlow.ID
+	// Find the call-start IVR flow for this account (cached)
+	if flow := a.CallManager.GetIVRFlowByConfig(account.OrganizationID, account.Name, "call_start"); flow != nil {
+		callLog.IVRFlowID = &flow.ID
 	}
 
 	if err := a.DB.Create(&callLog).Error; err != nil {

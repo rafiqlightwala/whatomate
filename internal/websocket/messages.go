@@ -47,7 +47,8 @@ const (
 	TypeCallTransferConnected = "call_transfer_connected"
 	TypeCallTransferCompleted = "call_transfer_completed"
 	TypeCallTransferAbandoned = "call_transfer_abandoned"
-	TypeCallTransferNoAnswer  = "call_transfer_no_answer"
+	TypeCallTransferNoAnswer    = "call_transfer_no_answer"
+	TypeCallTransferReassigned = "call_transfer_reassigned"
 
 	// Outgoing call types
 	TypeOutgoingCallInitiated = "outgoing_call_initiated"

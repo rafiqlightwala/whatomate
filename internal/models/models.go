@@ -171,8 +171,9 @@ type Team struct {
 	OrganizationID     uuid.UUID `gorm:"type:uuid;index;not null" json:"organization_id"`
 	Name               string    `gorm:"size:100;not null" json:"name"`
 	Description        string    `gorm:"size:500" json:"description"`
-	AssignmentStrategy AssignmentStrategy `gorm:"size:50;default:'round_robin'" json:"assignment_strategy"` // round_robin, load_balanced, manual
-	IsActive           bool      `gorm:"default:true" json:"is_active"`
+	AssignmentStrategy  AssignmentStrategy `gorm:"size:50;default:'round_robin'" json:"assignment_strategy"` // round_robin, load_balanced, manual
+	PerAgentTimeoutSecs int                `gorm:"default:0" json:"per_agent_timeout_secs"`                  // 0 = use org/global default
+	IsActive            bool               `gorm:"default:true" json:"is_active"`
 
 	// Relations
 	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`

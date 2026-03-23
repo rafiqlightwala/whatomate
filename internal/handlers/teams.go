@@ -13,8 +13,9 @@ import (
 type TeamRequest struct {
 	Name               string                   `json:"name" validate:"required"`
 	Description        string                   `json:"description"`
-	AssignmentStrategy models.AssignmentStrategy `json:"assignment_strategy"` // round_robin, load_balanced, manual
-	IsActive           bool                     `json:"is_active"`
+	AssignmentStrategy  models.AssignmentStrategy `json:"assignment_strategy"` // round_robin, load_balanced, manual
+	PerAgentTimeoutSecs int                      `json:"per_agent_timeout_secs"`
+	IsActive            bool                     `json:"is_active"`
 }
 
 // TeamMemberRequest represents add member request
@@ -28,9 +29,10 @@ type TeamResponse struct {
 	ID                 uuid.UUID                 `json:"id"`
 	Name               string                    `json:"name"`
 	Description        string                    `json:"description"`
-	AssignmentStrategy models.AssignmentStrategy `json:"assignment_strategy"`
-	IsActive           bool                      `json:"is_active"`
-	MemberCount        int                       `json:"member_count"`
+	AssignmentStrategy  models.AssignmentStrategy `json:"assignment_strategy"`
+	PerAgentTimeoutSecs int                       `json:"per_agent_timeout_secs"`
+	IsActive            bool                      `json:"is_active"`
+	MemberCount         int                       `json:"member_count"`
 	Members            []TeamMemberResponse      `json:"members,omitempty"`
 	CreatedAt          time.Time                 `json:"created_at"`
 	UpdatedAt          time.Time                 `json:"updated_at"`
@@ -168,11 +170,12 @@ func (a *App) CreateTeam(r *fastglue.Request) error {
 	}
 
 	team := models.Team{
-		OrganizationID:     orgID,
-		Name:               req.Name,
-		Description:        req.Description,
-		AssignmentStrategy: strategy,
-		IsActive:           true,
+		OrganizationID:      orgID,
+		Name:                req.Name,
+		Description:         req.Description,
+		AssignmentStrategy:  strategy,
+		PerAgentTimeoutSecs: req.PerAgentTimeoutSecs,
+		IsActive:            true,
 	}
 
 	if err := a.DB.Create(&team).Error; err != nil {
@@ -233,11 +236,14 @@ func (a *App) UpdateTeam(r *fastglue.Request) error {
 		}
 		team.AssignmentStrategy = req.AssignmentStrategy
 	}
+	team.PerAgentTimeoutSecs = req.PerAgentTimeoutSecs
 
 	if err := a.DB.Save(&team).Error; err != nil {
 		a.Log.Error("Failed to update team", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update team", nil, "")
 	}
+
+	a.Assigner.InvalidateTeamCache(teamID)
 
 	return r.SendEnvelope(map[string]interface{}{"team": buildTeamResponse(&team, false)})
 }
@@ -274,6 +280,8 @@ func (a *App) DeleteTeam(r *fastglue.Request) error {
 	if result.RowsAffected == 0 {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Team not found", nil, "")
 	}
+
+	a.Assigner.InvalidateTeamCache(teamID)
 
 	return r.SendEnvelope(map[string]string{"message": "Team deleted"})
 }
@@ -410,6 +418,8 @@ func (a *App) AddTeamMember(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to add member", nil, "")
 	}
 
+	a.Assigner.InvalidateTeamCache(teamID)
+
 	return r.SendEnvelope(map[string]interface{}{"member": TeamMemberResponse{
 		ID:          member.ID,
 		UserID:      member.UserID,
@@ -477,17 +487,20 @@ func (a *App) RemoveTeamMember(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Member not found in team", nil, "")
 	}
 
+	a.Assigner.InvalidateTeamCache(teamID)
+
 	return r.SendEnvelope(map[string]string{"message": "Member removed from team"})
 }
 
 // Helper function to build team response
 func buildTeamResponse(team *models.Team, includeMembers bool) TeamResponse {
 	resp := TeamResponse{
-		ID:                 team.ID,
-		Name:               team.Name,
-		Description:        team.Description,
-		AssignmentStrategy: team.AssignmentStrategy,
-		IsActive:           team.IsActive,
+		ID:                  team.ID,
+		Name:                team.Name,
+		Description:         team.Description,
+		AssignmentStrategy:  team.AssignmentStrategy,
+		PerAgentTimeoutSecs: team.PerAgentTimeoutSecs,
+		IsActive:            team.IsActive,
 		MemberCount:        len(team.Members),
 		CreatedAt:          team.CreatedAt,
 		UpdatedAt:          team.UpdatedAt,
