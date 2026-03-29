@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { MousePointerClick } from 'lucide-vue-next'
-import BaseNode from '@/components/shared/nodes/BaseNode.vue'
+import BaseNode from '@/components/calling/nodes/BaseNode.vue'
 
 defineOptions({ inheritAttrs: false })
 
