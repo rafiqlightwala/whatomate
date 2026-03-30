@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shridarpatil/whatomate/internal/models"
+	"github.com/shridarpatil/whatomate/internal/utils"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
 	"gorm.io/gorm"
@@ -264,10 +265,14 @@ func (a *App) ExportData(r *fastglue.Request) error {
 		a.Log.Error("Failed to export data", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to export data", nil, "")
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	// Get column types
-	colTypes, _ := rows.ColumnTypes()
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		a.Log.Error("Failed to get column types", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to export data", nil, "")
+	}
 
 	// Build CSV
 	var buf strings.Builder
@@ -312,10 +317,11 @@ func (a *App) ExportData(r *fastglue.Request) error {
 		// Apply phone masking for contacts export
 		if req.Table == "contacts" && a.ShouldMaskPhoneNumbers(orgID) {
 			for i, col := range safeColumns {
-				if col == "phone_number" {
-					csvRow[i] = MaskPhoneNumber(csvRow[i])
-				} else if col == "profile_name" {
-					csvRow[i] = MaskIfPhoneNumber(csvRow[i])
+				switch col {
+				case "phone_number":
+					csvRow[i] = utils.MaskPhoneNumber(csvRow[i])
+				case "profile_name":
+					csvRow[i] = utils.MaskIfPhoneNumber(csvRow[i])
 				}
 			}
 		}
@@ -403,7 +409,7 @@ func (a *App) ImportData(r *fastglue.Request) error {
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Failed to read file", nil, "")
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 
 	// Limit CSV file size to 10MB
 	const maxCSVSize = 10 << 20

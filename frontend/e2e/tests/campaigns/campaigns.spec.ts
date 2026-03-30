@@ -103,14 +103,36 @@ test.describe('Campaign Actions', () => {
     await campaignsPage.goto()
   })
 
-  test('should verify Start button exists for draft campaigns', async () => {
+  test('should verify Start button exists for draft campaigns and test confirmation dialog', async ({ page }) => {
     await campaignsPage.expectPageVisible()
     // Start button appears for draft/scheduled campaigns
+    const startBtn = campaignsPage.getStartButton()
+    if (await startBtn.isVisible()) {
+      await startBtn.click()
+      // Wait for the confirmation alert dialog
+      const alertDialog = page.locator('[role="alertdialog"]')
+      await alertDialog.waitFor({ state: 'visible', timeout: 3000 })
+      // Cancel to avoid actually starting the campaign
+      const cancelBtn = alertDialog.getByRole('button', { name: /cancel/i })
+      await cancelBtn.click()
+      await alertDialog.waitFor({ state: 'hidden' })
+    }
   })
 
-  test('should verify Pause button exists for running campaigns', async () => {
+  test('should verify Pause button exists for running campaigns and test confirmation dialog', async ({ page }) => {
     await campaignsPage.expectPageVisible()
     // Pause button appears for running/processing campaigns
+    const pauseBtn = campaignsPage.getPauseButton()
+    if (await pauseBtn.isVisible()) {
+      await pauseBtn.click()
+      // Wait for the confirmation alert dialog
+      const alertDialog = page.locator('[role="alertdialog"]')
+      await alertDialog.waitFor({ state: 'visible', timeout: 3000 })
+      // Cancel to avoid actually pausing the campaign
+      const cancelBtn = alertDialog.getByRole('button', { name: /cancel/i })
+      await cancelBtn.click()
+      await alertDialog.waitFor({ state: 'hidden' })
+    }
   })
 
   test('should verify Retry Failed button exists for campaigns with failed messages', async () => {

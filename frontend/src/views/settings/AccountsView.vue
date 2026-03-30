@@ -18,7 +18,7 @@ import {
 import { api } from '@/services/api'
 import { useOrganizationsStore } from '@/stores/organizations'
 import { toast } from 'vue-sonner'
-import { PageHeader, CrudFormDialog, DeleteConfirmDialog } from '@/components/shared'
+import { PageHeader, CrudFormDialog, DeleteConfirmDialog, IconButton, ErrorState } from '@/components/shared'
 import { getErrorMessage } from '@/lib/api-utils'
 import {
   Plus,
@@ -88,6 +88,8 @@ const testResults = ref<Record<string, TestResult>>({})
 const subscribingAccountId = ref<string | null>(null)
 const deleteDialogOpen = ref(false)
 const accountToDelete = ref<WhatsAppAccount | null>(null)
+const isDeleting = ref(false)
+const error = ref(false)
 
 // Business Profile Dialog State
 const isProfileDialogOpen = ref(false)
@@ -123,13 +125,15 @@ onMounted(async () => {
 
 async function fetchAccounts() {
   isLoading.value = true
+  error.value = false
   try {
     const response = await api.get('/accounts')
     accounts.value = response.data.data?.accounts || []
-  } catch (error: any) {
-    console.error('Failed to fetch accounts:', error)
+  } catch (e: any) {
+    console.error('Failed to fetch accounts:', e)
     toast.error(t('common.failedLoad', { resource: t('resources.accounts') }))
     accounts.value = []
+    error.value = true
   } finally {
     isLoading.value = false
   }
@@ -218,14 +222,17 @@ function openDeleteDialog(account: WhatsAppAccount) {
 async function confirmDelete() {
   if (!accountToDelete.value) return
 
+  isDeleting.value = true
   try {
     await api.delete(`/accounts/${accountToDelete.value.id}`)
     toast.success(t('common.deletedSuccess', { resource: t('resources.Account') }))
     deleteDialogOpen.value = false
     accountToDelete.value = null
     await fetchAccounts()
-  } catch (error: any) {
-    toast.error(getErrorMessage(error, t('common.failedDelete', { resource: t('resources.account') })))
+  } catch (e: any) {
+    toast.error(getErrorMessage(e, t('common.failedDelete', { resource: t('resources.account') })))
+  } finally {
+    isDeleting.value = false
   }
 }
 
@@ -265,9 +272,13 @@ async function subscribeApp(account: WhatsAppAccount) {
   }
 }
 
-function copyToClipboard(text: string, _label: string) {
-  navigator.clipboard.writeText(text)
-  toast.success(t('common.copiedToClipboard'))
+async function copyToClipboard(text: string, _label: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.success(t('common.copiedToClipboard'))
+  } catch {
+    toast.error(t('common.clipboardFailed'))
+  }
 }
 
 // Dark-first: default is dark mode, light: prefix for light mode
@@ -332,6 +343,16 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
       </div>
     </ScrollArea>
 
+    <!-- Error State -->
+    <ErrorState
+      v-else-if="error"
+      :title="$t('common.loadErrorTitle')"
+      :description="$t('common.loadErrorDescription')"
+      :retry-label="$t('common.retryLoad')"
+      class="flex-1"
+      @retry="fetchAccounts"
+    />
+
     <!-- Accounts List -->
     <ScrollArea v-else class="flex-1">
       <div class="p-6"><div class="max-w-6xl mx-auto space-y-4">
@@ -349,9 +370,7 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                   <code class="px-2 py-1 bg-blue-900 light:bg-blue-100 rounded text-sm font-mono">
                     {{ webhookUrl }}
                   </code>
-                  <Button variant="ghost" size="sm" @click="copyToClipboard(webhookUrl, 'Webhook URL')">
-                    <Copy class="h-4 w-4" />
-                  </Button>
+                  <IconButton :icon="Copy" :label="$t('accounts.copyWebhookUrl')" variant="ghost" size="sm" @click="copyToClipboard(webhookUrl, 'Webhook URL')" />
                 </div>
               </div>
             </div>
@@ -408,9 +427,7 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                     <div class="flex items-center gap-2">
                       <span class="text-white/50 light:text-gray-500">Phone ID:</span>
                       <code class="text-xs bg-white/[0.08] light:bg-gray-100 px-1 rounded text-white/70 light:text-gray-600">{{ account.phone_id }}</code>
-                      <Button variant="ghost" size="icon" class="h-6 w-6" @click="copyToClipboard(account.phone_id, 'Phone ID')">
-                        <Copy class="h-3 w-3" />
-                      </Button>
+                      <IconButton :icon="Copy" :label="$t('accounts.copyPhoneId')" class="h-6 w-6" @click="copyToClipboard(account.phone_id, 'Phone ID')" />
                     </div>
                     <div class="flex items-center gap-2">
                       <span class="text-white/50 light:text-gray-500">Business ID:</span>
@@ -462,9 +479,7 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                     <code class="text-xs bg-white/[0.08] light:bg-gray-100 px-2 py-0.5 rounded font-mono truncate max-w-[200px] text-white/70 light:text-gray-600">
                       {{ account.webhook_verify_token }}
                     </code>
-                    <Button variant="ghost" size="icon" class="h-6 w-6" @click="copyToClipboard(account.webhook_verify_token, 'Verify Token')">
-                      <Copy class="h-3 w-3" />
-                    </Button>
+                    <IconButton :icon="Copy" :label="$t('accounts.copyVerifyToken')" class="h-6 w-6" @click="copyToClipboard(account.webhook_verify_token, 'Verify Token')" />
                   </div>
                 </div>
               </div>
@@ -496,30 +511,13 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                   </TooltipTrigger>
                   <TooltipContent>{{ $t('accounts.subscribeTooltip') }}</TooltipContent>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button variant="ghost" size="icon" @click="openEditDialog(account)">
-                      <Pencil class="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{{ $t('common.edit') }}</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button variant="ghost" size="icon" @click="openProfileDialog(account)">
-                      <Store class="h-4 w-4 text-emerald-500" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{{ $t('accounts.businessProfile') }}</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button variant="ghost" size="icon" @click="openDeleteDialog(account)">
-                      <Trash2 class="h-4 w-4 text-destructive" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{{ $t('common.delete') }}</TooltipContent>
-                </Tooltip>
+                <IconButton :icon="Pencil" :label="$t('common.edit')" @click="openEditDialog(account)" />
+                <IconButton :icon="Store" :label="$t('accounts.businessProfile')" @click="openProfileDialog(account)">
+                  <Store class="h-4 w-4 text-emerald-500" />
+                </IconButton>
+                <IconButton :icon="Trash2" :label="$t('common.delete')" @click="openDeleteDialog(account)">
+                  <Trash2 class="h-4 w-4 text-destructive" />
+                </IconButton>
               </div>
             </div>
           </div>
@@ -726,6 +724,7 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
       v-model:open="deleteDialogOpen"
       :title="$t('accounts.deleteAccount')"
       :item-name="accountToDelete?.name"
+      :is-submitting="isDeleting"
       @confirm="confirmDelete"
     />
 

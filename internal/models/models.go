@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shridarpatil/whatomate/internal/crypto"
+	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"gorm.io/gorm"
 )
 
@@ -169,8 +171,9 @@ type Team struct {
 	OrganizationID     uuid.UUID `gorm:"type:uuid;index;not null" json:"organization_id"`
 	Name               string    `gorm:"size:100;not null" json:"name"`
 	Description        string    `gorm:"size:500" json:"description"`
-	AssignmentStrategy AssignmentStrategy `gorm:"size:50;default:'round_robin'" json:"assignment_strategy"` // round_robin, load_balanced, manual
-	IsActive           bool      `gorm:"default:true" json:"is_active"`
+	AssignmentStrategy  AssignmentStrategy `gorm:"size:50;default:'round_robin'" json:"assignment_strategy"` // round_robin, load_balanced, manual
+	PerAgentTimeoutSecs int                `gorm:"default:0" json:"per_agent_timeout_secs"`                  // 0 = use org/global default
+	IsActive            bool               `gorm:"default:true" json:"is_active"`
 
 	// Relations
 	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
@@ -305,6 +308,22 @@ type WhatsAppAccount struct {
 
 func (WhatsAppAccount) TableName() string {
 	return "whatsapp_accounts"
+}
+
+// ToWAAccount converts the model to the whatsapp client's Account type.
+func (a *WhatsAppAccount) ToWAAccount() *whatsapp.Account {
+	return &whatsapp.Account{
+		PhoneID:     a.PhoneID,
+		BusinessID:  a.BusinessID,
+		AppID:       a.AppID,
+		APIVersion:  a.APIVersion,
+		AccessToken: a.AccessToken,
+	}
+}
+
+// DecryptSecrets decrypts the encrypted access token and app secret fields.
+func (a *WhatsAppAccount) DecryptSecrets(encryptionKey string) {
+	crypto.DecryptFields(encryptionKey, &a.AccessToken, &a.AppSecret)
 }
 
 // Contact represents a WhatsApp contact/profile

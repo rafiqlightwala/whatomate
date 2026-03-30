@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { PageHeader } from '@/components/shared'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { toast } from 'vue-sonner'
-import { Settings, Bell, Loader2, Globe } from 'lucide-vue-next'
+import { Settings, Bell, Loader2, Globe, Phone, Upload, Play, Pause, Music } from 'lucide-vue-next'
 import { usersService, organizationService } from '@/services/api'
 
 const { t } = useI18n()
@@ -35,6 +35,24 @@ const notificationSettings = ref({
   campaign_updates: true
 })
 
+// Calling Settings
+const callingSettings = ref({
+  calling_enabled: false,
+  max_call_duration: 300,
+  transfer_timeout_secs: 120,
+  hold_music_file: '',
+  ringback_file: ''
+})
+
+const isUploadingHoldMusic = ref(false)
+const isUploadingRingback = ref(false)
+const holdMusicInput = ref<HTMLInputElement | null>(null)
+const ringbackInput = ref<HTMLInputElement | null>(null)
+const holdMusicAudio = ref<HTMLAudioElement | null>(null)
+const ringbackAudio = ref<HTMLAudioElement | null>(null)
+const playingHoldMusic = ref(false)
+const playingRingback = ref(false)
+
 onMounted(async () => {
   try {
     const [orgResponse, userResponse] = await Promise.all([
@@ -50,6 +68,13 @@ onMounted(async () => {
         default_timezone: orgData.settings?.timezone || 'UTC',
         date_format: orgData.settings?.date_format || 'YYYY-MM-DD',
         mask_phone_numbers: orgData.settings?.mask_phone_numbers || false
+      }
+      callingSettings.value = {
+        calling_enabled: orgData.settings?.calling_enabled || false,
+        max_call_duration: orgData.settings?.max_call_duration || 300,
+        transfer_timeout_secs: orgData.settings?.transfer_timeout_secs || 120,
+        hold_music_file: orgData.settings?.hold_music_file || '',
+        ringback_file: orgData.settings?.ringback_file || ''
       }
     }
 
@@ -101,6 +126,68 @@ async function saveNotificationSettings() {
     isSubmitting.value = false
   }
 }
+
+async function saveCallingSettings() {
+  isSubmitting.value = true
+  try {
+    await organizationService.updateSettings({
+      calling_enabled: callingSettings.value.calling_enabled,
+      max_call_duration: callingSettings.value.max_call_duration,
+      transfer_timeout_secs: callingSettings.value.transfer_timeout_secs
+    })
+    toast.success(t('settings.callingSaved'))
+  } catch (error) {
+    toast.error(t('common.failedSave', { resource: t('resources.settings') }))
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+async function uploadAudio(type: 'hold_music' | 'ringback', event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input?.files?.[0]
+  if (!file) return
+
+  const isHold = type === 'hold_music'
+  if (isHold) isUploadingHoldMusic.value = true
+  else isUploadingRingback.value = true
+
+  try {
+    const response = await organizationService.uploadOrgAudio(file, type)
+    const data = response.data.data || response.data
+    if (isHold) callingSettings.value.hold_music_file = data.filename
+    else callingSettings.value.ringback_file = data.filename
+    toast.success(t('settings.audioUploaded'))
+  } catch (error) {
+    toast.error(t('settings.audioUploadFailed'))
+  } finally {
+    if (isHold) isUploadingHoldMusic.value = false
+    else isUploadingRingback.value = false
+    input.value = ''
+  }
+}
+
+function togglePlayAudio(type: 'hold_music' | 'ringback') {
+  const isHold = type === 'hold_music'
+  const filename = isHold ? callingSettings.value.hold_music_file : callingSettings.value.ringback_file
+  if (!filename) return
+
+  const audioRef = isHold ? holdMusicAudio : ringbackAudio
+  const playingRef = isHold ? playingHoldMusic : playingRingback
+
+  if (playingRef.value && audioRef.value) {
+    audioRef.value.pause()
+    audioRef.value.currentTime = 0
+    playingRef.value = false
+    return
+  }
+
+  const audio = new Audio(`/api/ivr-flows/audio/${filename}`)
+  audioRef.value = audio
+  playingRef.value = true
+  audio.play()
+  audio.onended = () => { playingRef.value = false }
+}
 </script>
 
 <template>
@@ -109,7 +196,7 @@ async function saveNotificationSettings() {
     <ScrollArea class="flex-1">
       <div class="p-6 space-y-4 max-w-4xl mx-auto">
         <Tabs default-value="general" class="w-full">
-          <TabsList class="grid w-full grid-cols-2 mb-6 bg-white/[0.04] border border-white/[0.08] light:bg-gray-100 light:border-gray-200">
+          <TabsList class="grid w-full grid-cols-3 mb-6 bg-white/[0.04] border border-white/[0.08] light:bg-gray-100 light:border-gray-200">
             <TabsTrigger value="general" class="data-[state=active]:bg-white/[0.08] data-[state=active]:text-white text-white/50 light:data-[state=active]:bg-white light:data-[state=active]:text-gray-900 light:text-gray-500">
               <Settings class="h-4 w-4 mr-2" />
               {{ $t('settings.general') }}
@@ -117,6 +204,10 @@ async function saveNotificationSettings() {
             <TabsTrigger value="notifications" class="data-[state=active]:bg-white/[0.08] data-[state=active]:text-white text-white/50 light:data-[state=active]:bg-white light:data-[state=active]:text-gray-900 light:text-gray-500">
               <Bell class="h-4 w-4 mr-2" />
               {{ $t('settings.notifications') }}
+            </TabsTrigger>
+            <TabsTrigger value="calling" class="data-[state=active]:bg-white/[0.08] data-[state=active]:text-white text-white/50 light:data-[state=active]:bg-white light:data-[state=active]:text-gray-900 light:text-gray-500">
+              <Phone class="h-4 w-4 mr-2" />
+              {{ $t('settings.calling') }}
             </TabsTrigger>
           </TabsList>
 
@@ -237,6 +328,128 @@ async function saveNotificationSettings() {
                 </div>
                 <div class="flex justify-end pt-4">
                   <Button variant="outline" size="sm" class="bg-white/[0.04] border-white/[0.1] text-white/70 hover:bg-white/[0.08] hover:text-white light:bg-white light:border-gray-200 light:text-gray-700 light:hover:bg-gray-50" @click="saveNotificationSettings" :disabled="isSubmitting">
+                    <Loader2 v-if="isSubmitting" class="mr-2 h-4 w-4 animate-spin" />
+                    {{ $t('settings.save') }}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+
+          <!-- Calling Settings Tab -->
+          <TabsContent value="calling">
+            <div class="rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
+              <div class="p-6 pb-3">
+                <h3 class="text-lg font-semibold text-white light:text-gray-900">{{ $t('settings.callingSettings') }}</h3>
+                <p class="text-sm text-white/40 light:text-gray-500">{{ $t('settings.callingSettingsDesc') }}</p>
+              </div>
+              <div class="p-6 pt-3 space-y-4">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="font-medium text-white light:text-gray-900">{{ $t('settings.callingEnabled') }}</p>
+                    <p class="text-sm text-white/40 light:text-gray-500">{{ $t('settings.callingEnabledDesc') }}</p>
+                  </div>
+                  <Switch
+                    :checked="callingSettings.calling_enabled"
+                    @update:checked="callingSettings.calling_enabled = $event"
+                  />
+                </div>
+                <Separator class="bg-white/[0.08] light:bg-gray-200" />
+                <div class="grid grid-cols-2 gap-4" :class="{ 'opacity-50 pointer-events-none': !callingSettings.calling_enabled }">
+                  <div class="space-y-2">
+                    <Label for="max_call_duration" class="text-white/70 light:text-gray-700">{{ $t('settings.maxCallDuration') }}</Label>
+                    <Input
+                      id="max_call_duration"
+                      type="number"
+                      v-model.number="callingSettings.max_call_duration"
+                      :min="60"
+                      :max="3600"
+                    />
+                    <p class="text-xs text-white/40 light:text-gray-500">{{ $t('settings.maxCallDurationDesc') }}</p>
+                  </div>
+                  <div class="space-y-2">
+                    <Label for="transfer_timeout" class="text-white/70 light:text-gray-700">{{ $t('settings.transferTimeout') }}</Label>
+                    <Input
+                      id="transfer_timeout"
+                      type="number"
+                      v-model.number="callingSettings.transfer_timeout_secs"
+                      :min="30"
+                      :max="600"
+                    />
+                    <p class="text-xs text-white/40 light:text-gray-500">{{ $t('settings.transferTimeoutDesc') }}</p>
+                  </div>
+                </div>
+                <Separator class="bg-white/[0.08] light:bg-gray-200" />
+                <!-- Hold Music Upload -->
+                <div class="space-y-3" :class="{ 'opacity-50 pointer-events-none': !callingSettings.calling_enabled }">
+                  <div>
+                    <Label class="text-white/70 light:text-gray-700 flex items-center gap-2">
+                      <Music class="h-4 w-4" />
+                      {{ $t('settings.holdMusic') }}
+                    </Label>
+                    <p class="text-xs text-white/40 light:text-gray-500 mt-1">{{ $t('settings.holdMusicDesc') }}</p>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span class="text-sm text-white/50 light:text-gray-500">
+                      {{ callingSettings.hold_music_file ? `${$t('settings.currentFile')}: ${callingSettings.hold_music_file}` : $t('settings.noFileUploaded') }}
+                    </span>
+                    <Button
+                      v-if="callingSettings.hold_music_file"
+                      variant="ghost"
+                      size="sm"
+                      class="h-8 w-8 p-0 text-white/50 hover:text-white light:text-gray-500 light:hover:text-gray-900"
+                      @click="togglePlayAudio('hold_music')"
+                    >
+                      <Pause v-if="playingHoldMusic" class="h-4 w-4" />
+                      <Play v-else class="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <input ref="holdMusicInput" type="file" accept=".ogg,.opus,.mp3,.wav" class="hidden" @change="uploadAudio('hold_music', $event)" />
+                    <Button variant="outline" size="sm" class="bg-white/[0.04] border-white/[0.1] text-white/70 hover:bg-white/[0.08] hover:text-white light:bg-white light:border-gray-200 light:text-gray-700 light:hover:bg-gray-50" @click="holdMusicInput?.click()" :disabled="isUploadingHoldMusic">
+                      <Loader2 v-if="isUploadingHoldMusic" class="mr-2 h-4 w-4 animate-spin" />
+                      <Upload v-else class="mr-2 h-4 w-4" />
+                      {{ $t('settings.uploadAudio') }}
+                    </Button>
+                    <span class="text-xs text-white/30 light:text-gray-400">.ogg, .opus, .mp3, .wav (max 5MB)</span>
+                  </div>
+                </div>
+                <!-- Ringback Tone Upload -->
+                <div class="space-y-3" :class="{ 'opacity-50 pointer-events-none': !callingSettings.calling_enabled }">
+                  <div>
+                    <Label class="text-white/70 light:text-gray-700 flex items-center gap-2">
+                      <Phone class="h-4 w-4" />
+                      {{ $t('settings.ringbackTone') }}
+                    </Label>
+                    <p class="text-xs text-white/40 light:text-gray-500 mt-1">{{ $t('settings.ringbackToneDesc') }}</p>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span class="text-sm text-white/50 light:text-gray-500">
+                      {{ callingSettings.ringback_file ? `${$t('settings.currentFile')}: ${callingSettings.ringback_file}` : $t('settings.noFileUploaded') }}
+                    </span>
+                    <Button
+                      v-if="callingSettings.ringback_file"
+                      variant="ghost"
+                      size="sm"
+                      class="h-8 w-8 p-0 text-white/50 hover:text-white light:text-gray-500 light:hover:text-gray-900"
+                      @click="togglePlayAudio('ringback')"
+                    >
+                      <Pause v-if="playingRingback" class="h-4 w-4" />
+                      <Play v-else class="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <input ref="ringbackInput" type="file" accept=".ogg,.opus,.mp3,.wav" class="hidden" @change="uploadAudio('ringback', $event)" />
+                    <Button variant="outline" size="sm" class="bg-white/[0.04] border-white/[0.1] text-white/70 hover:bg-white/[0.08] hover:text-white light:bg-white light:border-gray-200 light:text-gray-700 light:hover:bg-gray-50" @click="ringbackInput?.click()" :disabled="isUploadingRingback">
+                      <Loader2 v-if="isUploadingRingback" class="mr-2 h-4 w-4 animate-spin" />
+                      <Upload v-else class="mr-2 h-4 w-4" />
+                      {{ $t('settings.uploadAudio') }}
+                    </Button>
+                    <span class="text-xs text-white/30 light:text-gray-400">.ogg, .opus, .mp3, .wav (max 5MB)</span>
+                  </div>
+                </div>
+                <div class="flex justify-end pt-4">
+                  <Button variant="outline" size="sm" class="bg-white/[0.04] border-white/[0.1] text-white/70 hover:bg-white/[0.08] hover:text-white light:bg-white light:border-gray-200 light:text-gray-700 light:hover:bg-gray-50" @click="saveCallingSettings" :disabled="isSubmitting">
                     <Loader2 v-if="isSubmitting" class="mr-2 h-4 w-4 animate-spin" />
                     {{ $t('settings.save') }}
                   </Button>

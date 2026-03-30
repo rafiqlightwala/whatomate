@@ -17,7 +17,7 @@ import {
 import { agentAnalyticsService } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import { useUsersStore } from '@/stores/users'
-import { PageHeader } from '@/components/shared'
+import { PageHeader, ErrorState } from '@/components/shared'
 import {
   Command,
   CommandEmpty,
@@ -87,6 +87,7 @@ const isAdminOrManager = computed(() => ['admin', 'manager'].includes(authStore.
 
 const analytics = ref<AgentAnalyticsResponse | null>(null)
 const isLoading = ref(true)
+const error = ref<string | null>(null)
 
 // Agent filter for admins/managers
 interface Agent {
@@ -236,6 +237,7 @@ const fetchAgents = async () => {
 
 const fetchAnalytics = async () => {
   isLoading.value = true
+  error.value = null
   try {
     const { from, to } = getDateRange.value
     const params: { from: string; to: string; agent_id?: string } = { from, to }
@@ -245,8 +247,9 @@ const fetchAnalytics = async () => {
     const response = await agentAnalyticsService.getSummary(params)
     const data = response.data.data || response.data
     analytics.value = data
-  } catch (error) {
-    console.error('Failed to load agent analytics:', error)
+  } catch (err) {
+    console.error('Failed to load agent analytics:', err)
+    error.value = t('agentAnalytics.errorLoadingAnalytics')
     analytics.value = null
   } finally {
     isLoading.value = false
@@ -496,8 +499,17 @@ void _displayStats.value // Suppress unused warning
     <!-- Content -->
     <ScrollArea class="flex-1">
       <div class="p-6 space-y-6">
+        <!-- Error State -->
+        <ErrorState
+          v-if="error && !isLoading"
+          :title="$t('common.loadErrorTitle')"
+          :description="error"
+          :retry-label="$t('common.retry')"
+          @retry="fetchAnalytics"
+        />
+
         <!-- Stats Cards -->
-        <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+        <div v-if="!error" class="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
           <template v-if="isLoading">
             <div v-for="i in 5" :key="i" class="rounded-xl border border-white/[0.08] bg-white/[0.02] p-6 light:bg-white light:border-gray-200">
               <div class="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -616,7 +628,7 @@ void _displayStats.value // Suppress unused warning
         </div>
 
         <!-- Charts Row -->
-        <div class="grid gap-4 md:grid-cols-2">
+        <div v-if="!error" class="grid gap-4 md:grid-cols-2">
           <!-- Trend Chart -->
           <Card>
             <CardHeader>
@@ -665,7 +677,7 @@ void _displayStats.value // Suppress unused warning
         </div>
 
         <!-- Agent Comparison (Admin/Manager only, when viewing all agents) -->
-        <template v-if="isAdminOrManager && selectedAgentId === 'all'">
+        <template v-if="!error && isAdminOrManager && selectedAgentId === 'all'">
           <Card>
             <CardHeader>
               <CardTitle>{{ $t('agentAnalytics.agentComparison') }}</CardTitle>

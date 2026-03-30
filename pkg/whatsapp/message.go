@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -226,80 +227,131 @@ type TemplateParam struct {
 }
 
 // SendTemplateMessage sends a template message
-func (c *Client) SendTemplateMessage(ctx context.Context, account *Account, phoneNumber, templateName, languageCode string, bodyParams map[string]string) (string, error) {
-	template := map[string]interface{}{
-		"name": templateName,
-		"language": map[string]interface{}{
-			"code": languageCode,
+// BodyParamsToComponents converts a bodyParams map into WhatsApp template components.
+// Supports both positional (numeric keys) and named parameters.
+func BodyParamsToComponents(bodyParams map[string]string) []map[string]interface{} {
+	if len(bodyParams) == 0 {
+		return nil
+	}
+
+	// Check if using named parameters (non-numeric keys like "name", "order_id")
+	isNamedParams := false
+	for key := range bodyParams {
+		if _, err := strconv.Atoi(key); err != nil {
+			isNamedParams = true
+			break
+		}
+	}
+
+	// Get sorted keys for deterministic ordering
+	keys := make([]string, 0, len(bodyParams))
+	for k := range bodyParams {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	params := make([]map[string]interface{}, 0, len(bodyParams))
+	for _, key := range keys {
+		param := map[string]interface{}{
+			"type": "text",
+			"text": bodyParams[key],
+		}
+		if isNamedParams {
+			param["parameter_name"] = key
+		}
+		params = append(params, param)
+	}
+
+	return []map[string]interface{}{
+		{
+			"type":       "body",
+			"parameters": params,
 		},
 	}
+}
 
-	// Add body parameters if provided
-	if len(bodyParams) > 0 {
-		// Check if using named parameters (non-numeric keys like "name", "order_id")
-		isNamedParams := false
-		for key := range bodyParams {
-			if _, err := strconv.Atoi(key); err != nil {
-				isNamedParams = true
-				break
-			}
-		}
+// BuildTemplateComponents builds the full WhatsApp template components array,
+// including an optional header component (for IMAGE/VIDEO/DOCUMENT) and body parameters.
+func BuildTemplateComponents(bodyParams map[string]string, headerType string, headerMediaID string) []map[string]interface{} {
+	var components []map[string]interface{}
 
-		// Get sorted keys for deterministic ordering
-		keys := make([]string, 0, len(bodyParams))
-		for k := range bodyParams {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		params := make([]map[string]interface{}, 0, len(bodyParams))
-		for _, key := range keys {
-			param := map[string]interface{}{
-				"type": "text",
-				"text": bodyParams[key],
-			}
-			// For named parameters, include the parameter_name field
-			if isNamedParams {
-				param["parameter_name"] = key
-			}
-			params = append(params, param)
-		}
-		template["components"] = []map[string]interface{}{
-			{
-				"type":       "body",
-				"parameters": params,
+	// Add header component if media is provided
+	if headerMediaID != "" {
+		mediaType := strings.ToLower(headerType) // "image", "video", "document"
+		headerParam := map[string]interface{}{
+			"type": mediaType,
+			mediaType: map[string]interface{}{
+				"id": headerMediaID,
 			},
 		}
+		components = append(components, map[string]interface{}{
+			"type":       "header",
+			"parameters": []map[string]interface{}{headerParam},
+		})
 	}
 
-	payload := map[string]interface{}{
-		"messaging_product": "whatsapp",
-		"to":                phoneNumber,
-		"type":              "template",
-		"template":          template,
+	// Add body component with text parameters
+	bodyComponents := BodyParamsToComponents(bodyParams)
+	components = append(components, bodyComponents...)
+
+	if len(components) == 0 {
+		return nil
+	}
+	return components
+}
+
+// ButtonURLParamsToComponents converts button parameters to WhatsApp API button components.
+// buttonParams maps button index (as string like "0", "1") to the dynamic parameter value.
+// templateButtons is the JSONB buttons array from the template, used to determine button type.
+// URL buttons produce: {"type": "button", "sub_type": "url", "index": "0", "parameters": [{"type": "text", "text": "value"}]}
+// COPY_CODE buttons produce: {"type": "button", "sub_type": "copy_code", "index": "0", "parameters": [{"type": "coupon_code", "coupon_code": "value"}]}
+func ButtonURLParamsToComponents(buttonParams map[string]string, templateButtons ...[]interface{}) []map[string]interface{} {
+	if len(buttonParams) == 0 {
+		return nil
 	}
 
-	url := c.buildMessagesURL(account)
-	c.Log.Debug("Sending template message", "phone", phoneNumber, "template", templateName)
-
-	respBody, err := c.doRequest(ctx, "POST", url, payload, account.AccessToken)
-	if err != nil {
-		c.Log.Error("Failed to send template message", "error", err, "phone", phoneNumber, "template", templateName)
-		return "", fmt.Errorf("failed to send template message: %w", err)
+	// Build a lookup of button index -> type from template buttons
+	btnTypes := map[string]string{}
+	if len(templateButtons) > 0 {
+		for i, raw := range templateButtons[0] {
+			if btn, ok := raw.(map[string]interface{}); ok {
+				if t, ok := btn["type"].(string); ok {
+					btnTypes[fmt.Sprintf("%d", i)] = strings.ToUpper(t)
+				}
+			}
+		}
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	keys := make([]string, 0, len(buttonParams))
+	for k := range buttonParams {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
+	components := make([]map[string]interface{}, 0, len(buttonParams))
+	for _, index := range keys {
+		value := buttonParams[index]
+		if btnTypes[index] == "COPY_CODE" {
+			components = append(components, map[string]interface{}{
+				"type":     "button",
+				"sub_type": "copy_code",
+				"index":    index,
+				"parameters": []map[string]interface{}{
+					{"type": "coupon_code", "coupon_code": value},
+				},
+			})
+		} else {
+			components = append(components, map[string]interface{}{
+				"type":     "button",
+				"sub_type": "url",
+				"index":    index,
+				"parameters": []map[string]interface{}{
+					{"type": "text", "text": value},
+				},
+			})
+		}
 	}
-
-	messageID := resp.Messages[0].ID
-	c.Log.Info("Template message sent", "message_id", messageID, "phone", phoneNumber, "template", templateName)
-	return messageID, nil
+	return components
 }
 
 // SendFlowMessage sends an interactive WhatsApp Flow message
@@ -387,8 +439,8 @@ func (c *Client) SendFlowMessage(ctx context.Context, account *Account, phoneNum
 	return messageID, nil
 }
 
-// SendTemplateMessageWithComponents sends a template message with full component control
-func (c *Client) SendTemplateMessageWithComponents(ctx context.Context, account *Account, phoneNumber, templateName, languageCode string, components []map[string]interface{}) (string, error) {
+// SendTemplateMessage sends a template message with optional components (header, body, buttons, etc.)
+func (c *Client) SendTemplateMessage(ctx context.Context, account *Account, phoneNumber, templateName, languageCode string, components []map[string]interface{}) (string, error) {
 	template := map[string]interface{}{
 		"name": templateName,
 		"language": map[string]interface{}{

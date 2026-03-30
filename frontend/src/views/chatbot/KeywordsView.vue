@@ -27,7 +27,7 @@ import {
 import { chatbotService } from '@/services/api'
 import { useCrudState } from '@/composables/useCrudState'
 import { toast } from 'vue-sonner'
-import { PageHeader, SearchInput, DataTable, DeleteConfirmDialog, type Column } from '@/components/shared'
+import { PageHeader, SearchInput, DataTable, DeleteConfirmDialog, IconButton, ErrorState, type Column } from '@/components/shared'
 import { getErrorMessage } from '@/lib/api-utils'
 import { Plus, Pencil, Trash2, Key } from 'lucide-vue-next'
 import { useDebounceFn } from '@vueuse/core'
@@ -67,6 +67,8 @@ const defaultFormData: KeywordFormData = {
 
 const rules = ref<KeywordRule[]>([])
 const isLoading = ref(true)
+const isDeleting = ref(false)
+const error = ref<string | null>(null)
 const searchQuery = ref('')
 const {
   isSubmitting, isDialogOpen, editingItem: editingRule, deleteDialogOpen, itemToDelete: ruleToDelete,
@@ -108,6 +110,7 @@ onMounted(async () => {
 
 async function fetchRules() {
   isLoading.value = true
+  error.value = null
   try {
     const response = await chatbotService.listKeywords({
       search: searchQuery.value || undefined,
@@ -118,8 +121,9 @@ async function fetchRules() {
     const data = (response.data as any).data || response.data
     rules.value = data.rules || []
     totalItems.value = data.total ?? rules.value.length
-  } catch (error) {
-    console.error('Failed to load keyword rules:', error)
+  } catch (err) {
+    console.error('Failed to load keyword rules:', err)
+    error.value = t('keywords.fetchError')
     rules.value = []
   } finally {
     isLoading.value = false
@@ -208,6 +212,7 @@ async function saveRule() {
 async function confirmDeleteRule() {
   if (!ruleToDelete.value) return
 
+  isDeleting.value = true
   try {
     await chatbotService.deleteKeyword(ruleToDelete.value.id)
     toast.success(t('common.deletedSuccess', { resource: t('resources.KeywordRule') }))
@@ -215,6 +220,8 @@ async function confirmDeleteRule() {
     await fetchRules()
   } catch (error: any) {
     toast.error(getErrorMessage(error, t('common.failedDelete', { resource: t('resources.keywordRule') })))
+  } finally {
+    isDeleting.value = false
   }
 }
 
@@ -267,7 +274,15 @@ const emptyDescription = computed(() => {
               </div>
             </CardHeader>
             <CardContent>
+              <ErrorState
+                v-if="error"
+                :title="$t('common.loadErrorTitle')"
+                :description="error"
+                :retry-label="$t('common.retry')"
+                @retry="fetchRules"
+              />
               <DataTable
+                v-else
                 :items="rules"
                 :columns="columns"
                 :is-loading="isLoading"
@@ -317,12 +332,8 @@ const emptyDescription = computed(() => {
                 </template>
                 <template #cell-actions="{ item: rule }">
                   <div class="flex items-center justify-end gap-1">
-                    <Button variant="ghost" size="icon" class="h-8 w-8" @click="openEditDialog(rule)">
-                      <Pencil class="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive" @click="openDeleteDialog(rule)">
-                      <Trash2 class="h-4 w-4" />
-                    </Button>
+                    <IconButton :icon="Pencil" :label="$t('keywords.editRuleLabel')" class="h-8 w-8" @click="openEditDialog(rule)" />
+                    <IconButton :icon="Trash2" :label="$t('keywords.deleteRuleLabel')" class="h-8 w-8 text-destructive" @click="openDeleteDialog(rule)" />
                   </div>
                 </template>
                 <template #empty-action>
@@ -430,14 +441,7 @@ const emptyDescription = computed(() => {
                   :placeholder="$t('keywords.buttonTitle')"
                   class="flex-1"
                 />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  @click="removeButton(index)"
-                >
-                  <Trash2 class="h-4 w-4 text-destructive" />
-                </Button>
+                <IconButton :icon="Trash2" :label="$t('keywords.removeButtonLabel')" class="text-destructive" @click="removeButton(index)" />
               </div>
             </div>
           </div>
@@ -473,6 +477,7 @@ const emptyDescription = computed(() => {
       v-model:open="deleteDialogOpen"
       :title="$t('keywords.deleteRule')"
       :description="$t('keywords.deleteRuleDesc')"
+      :is-submitting="isDeleting"
       @confirm="confirmDeleteRule"
     />
   </div>

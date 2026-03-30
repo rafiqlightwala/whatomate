@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { PageHeader, SearchInput, CrudFormDialog, DeleteConfirmDialog, DataTable, type Column } from '@/components/shared'
+import { PageHeader, SearchInput, CrudFormDialog, DeleteConfirmDialog, DataTable, IconButton, ErrorState, type Column } from '@/components/shared'
 import { cannedResponsesService, type CannedResponse } from '@/services/api'
 import { useCrudState } from '@/composables/useCrudState'
 import { toast } from 'vue-sonner'
@@ -33,6 +33,7 @@ const defaultFormData: CannedResponseFormData = { name: '', shortcut: '', conten
 
 const cannedResponses = ref<CannedResponse[]>([])
 const isLoading = ref(false)
+const error = ref<string | null>(null)
 const {
   isSubmitting, isDialogOpen, editingItem: editingResponse, deleteDialogOpen, itemToDelete: responseToDelete,
   formData, openCreateDialog, openEditDialog: baseOpenEditDialog, openDeleteDialog, closeDialog, closeDeleteDialog,
@@ -59,6 +60,7 @@ const sortDirection = ref<'asc' | 'desc'>('asc')
 
 async function fetchItems() {
   isLoading.value = true
+  error.value = null
   try {
     const response = await cannedResponsesService.list({
       search: searchQuery.value || undefined,
@@ -69,8 +71,9 @@ async function fetchItems() {
     const data = (response.data as any).data || response.data
     cannedResponses.value = data.canned_responses || []
     totalItems.value = data.total ?? cannedResponses.value.length
-  } catch (error) {
-    toast.error(getErrorMessage(error, t('common.failedLoad', { resource: t('resources.cannedResponses') })))
+  } catch (err) {
+    toast.error(getErrorMessage(err, t('common.failedLoad', { resource: t('resources.cannedResponses') })))
+    error.value = t('cannedResponses.errorLoadingResponses')
   } finally {
     isLoading.value = false
   }
@@ -121,15 +124,20 @@ async function saveResponse() {
   }
 }
 
+const isDeleting = ref(false)
+
 async function confirmDelete() {
   if (!responseToDelete.value) return
+  isDeleting.value = true
   try {
     await cannedResponsesService.delete(responseToDelete.value.id)
     toast.success(t('common.deletedSuccess', { resource: t('resources.CannedResponse') }))
     closeDeleteDialog()
     await fetchItems()
-  } catch (error) {
-    toast.error(getErrorMessage(error, t('common.failedDelete', { resource: t('resources.cannedResponse') })))
+  } catch (err) {
+    toast.error(getErrorMessage(err, t('common.failedDelete', { resource: t('resources.cannedResponse') })))
+  } finally {
+    isDeleting.value = false
   }
 }
 
@@ -148,7 +156,14 @@ function getCategoryLabel(category: string): string { return getLabelFromValue(C
     <ScrollArea class="flex-1">
       <div class="p-6">
         <div class="max-w-6xl mx-auto">
-          <Card>
+          <ErrorState
+            v-if="error && !isLoading"
+            :title="$t('common.loadErrorTitle')"
+            :description="error"
+            :retry-label="$t('common.retry')"
+            @retry="fetchItems"
+          />
+          <Card v-else>
             <CardHeader>
               <div class="flex items-center justify-between flex-wrap gap-4">
                 <div>
@@ -205,15 +220,25 @@ function getCategoryLabel(category: string): string { return getLabelFromValue(C
                 </template>
                 <template #cell-actions="{ item: response }">
                   <div class="flex items-center justify-end gap-1">
-                    <Button variant="ghost" size="icon" class="h-8 w-8" @click="copyToClipboard(response.content)" title="Copy">
-                      <Copy class="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" class="h-8 w-8" @click="openEditDialog(response)" title="Edit">
-                      <Pencil class="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive" @click="openDeleteDialog(response)" title="Delete">
-                      <Trash2 class="h-4 w-4" />
-                    </Button>
+                    <IconButton
+                      :icon="Copy"
+                      :label="$t('cannedResponses.copyContent')"
+                      class="h-8 w-8"
+                      @click="copyToClipboard(response.content)"
+                    />
+                    <IconButton
+                      :icon="Pencil"
+                      :label="$t('cannedResponses.editResponse')"
+                      class="h-8 w-8"
+                      @click="openEditDialog(response)"
+                    />
+                    <IconButton
+                      :icon="Trash2"
+                      :label="$t('cannedResponses.deleteResponse')"
+                      variant="ghost"
+                      class="h-8 w-8 text-destructive"
+                      @click="openDeleteDialog(response)"
+                    />
                   </div>
                 </template>
                 <template #empty-action>
@@ -251,6 +276,6 @@ function getCategoryLabel(category: string): string { return getLabelFromValue(C
       </div>
     </CrudFormDialog>
 
-    <DeleteConfirmDialog v-model:open="deleteDialogOpen" :title="$t('cannedResponses.deleteTitle')" :item-name="responseToDelete?.name" @confirm="confirmDelete" />
+    <DeleteConfirmDialog v-model:open="deleteDialogOpen" :title="$t('cannedResponses.deleteTitle')" :item-name="responseToDelete?.name" :is-submitting="isDeleting" @confirm="confirmDelete" />
   </div>
 </template>

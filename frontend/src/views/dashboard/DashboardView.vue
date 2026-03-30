@@ -74,9 +74,9 @@ import {
 import { Line, Bar, Pie } from '@/lib/charts'
 import type { DateRange } from 'reka-ui'
 import { CalendarDate } from '@internationalized/date'
-import { useToast } from '@/components/ui/toast'
+import { useAppToast } from '@/composables/useAppToast'
 
-const { toast } = useToast()
+const { success, error: showError } = useAppToast()
 const { t } = useI18n()
 const authStore = useAuthStore()
 
@@ -422,8 +422,16 @@ const formatTime = (dateStr: string): string => {
 }
 
 const getWidgetColor = (color: string) => {
+  const gradientMap: Record<string, string> = {
+    blue: 'bg-gradient-to-r from-blue-500/60 to-blue-500/0',
+    green: 'bg-gradient-to-r from-emerald-500/60 to-emerald-500/0',
+    purple: 'bg-gradient-to-r from-violet-500/60 to-violet-500/0',
+    orange: 'bg-gradient-to-r from-amber-500/60 to-amber-500/0',
+    red: 'bg-gradient-to-r from-rose-500/60 to-rose-500/0',
+    cyan: 'bg-gradient-to-r from-cyan-500/60 to-cyan-500/0'
+  }
   const colorConfig = colorOptions.value.find(c => c.value === color) || colorOptions.value[0]
-  return colorConfig
+  return { ...colorConfig, gradient: gradientMap[colorConfig.value] || gradientMap.blue }
 }
 
 const getWidgetIcon = (dataSource: string) => {
@@ -542,11 +550,7 @@ const persistLayout = async () => {
   try {
     await widgetsService.saveLayout(layoutItems)
   } catch (error: any) {
-    toast({
-      title: t('common.error'),
-      description: error.response?.data?.message || t('dashboard.saveLayoutFailed'),
-      variant: 'destructive'
-    })
+    showError(t('common.error'), error.response?.data?.message || t('dashboard.saveLayoutFailed'))
   }
 }
 
@@ -700,20 +704,12 @@ const saveWidget = async () => {
   const isShortcuts = widgetForm.value.display_type === 'shortcuts'
 
   if (!widgetForm.value.name) {
-    toast({
-      title: t('dashboard.validationError'),
-      description: t('dashboard.nameRequired'),
-      variant: 'destructive'
-    })
+    showError(t('dashboard.validationError'), t('dashboard.nameRequired'))
     return
   }
 
   if (!isShortcuts && !widgetForm.value.data_source) {
-    toast({
-      title: t('dashboard.validationError'),
-      description: t('dashboard.dataSourceRequired'),
-      variant: 'destructive'
-    })
+    showError(t('dashboard.validationError'), t('dashboard.dataSourceRequired'))
     return
   }
 
@@ -747,20 +743,16 @@ const saveWidget = async () => {
   try {
     if (isEditMode.value && editingWidgetId.value) {
       await widgetsService.update(editingWidgetId.value, payload)
-      toast({ title: t('common.updatedSuccess', { resource: t('resources.Widget') }) })
+      success(t('common.updatedSuccess', { resource: t('resources.Widget') }))
     } else {
       await widgetsService.create(payload)
-      toast({ title: t('common.createdSuccess', { resource: t('resources.Widget') }) })
+      success(t('common.createdSuccess', { resource: t('resources.Widget') }))
     }
     isWidgetDialogOpen.value = false
     await fetchWidgets()
     await fetchWidgetData()
   } catch (error: any) {
-    toast({
-      title: t('common.error'),
-      description: error.response?.data?.message || t('common.failedSave', { resource: t('resources.widget') }),
-      variant: 'destructive'
-    })
+    showError(t('common.error'), error.response?.data?.message || t('common.failedSave', { resource: t('resources.widget') }))
   } finally {
     isSavingWidget.value = false
   }
@@ -776,17 +768,13 @@ const confirmDeleteWidget = async () => {
 
   try {
     await widgetsService.delete(widgetToDelete.value.id)
-    toast({ title: t('common.deletedSuccess', { resource: t('resources.Widget') }) })
+    success(t('common.deletedSuccess', { resource: t('resources.Widget') }))
     deleteDialogOpen.value = false
     widgetToDelete.value = null
     await fetchWidgets()
     await fetchWidgetData()
   } catch (error: any) {
-    toast({
-      title: t('common.error'),
-      description: error.response?.data?.message || t('common.failedDelete', { resource: t('resources.widget') }),
-      variant: 'destructive'
-    })
+    showError(t('common.error'), error.response?.data?.message || t('common.failedDelete', { resource: t('resources.widget') }))
   }
 }
 
@@ -935,6 +923,9 @@ onMounted(() => {
               v-if="getWidgetById(item.i) && isNumberWidget(getWidgetById(item.i)!)"
               class="group relative h-full card-depth rounded-xl border border-white/[0.08] bg-white/[0.04] p-6 light:bg-white light:border-gray-200 hover:bg-white/[0.06] light:hover:bg-gray-50 transition-colors overflow-hidden"
             >
+              <!-- Gradient accent bar -->
+              <div :class="['absolute top-0 inset-x-0 h-0.5', getWidgetColor(getWidgetById(item.i)!.color).gradient]" />
+
               <!-- Drag handle indicator -->
               <div v-if="isDragMode" class="widget-drag-handle absolute top-2 left-2 text-white/20 light:text-gray-300 cursor-grab active:cursor-grabbing z-10">
                 <GripVertical class="h-4 w-4" />
@@ -983,7 +974,9 @@ onMounted(() => {
                     <Skeleton class="h-8 w-20 bg-white/[0.08] light:bg-gray-200" />
                   </template>
                   <template v-else>
-                    {{ formatNumber(widgetData[item.i]?.value || 0) }}
+                    <Transition name="counter-fade" mode="out-in">
+                      <span :key="widgetData[item.i]?.value">{{ formatNumber(widgetData[item.i]?.value || 0) }}</span>
+                    </Transition>
                   </template>
                 </div>
                 <div v-if="getWidgetById(item.i)!.show_change && widgetData[item.i]" class="flex items-center text-xs text-white/40 light:text-gray-500 mt-1">
@@ -1539,5 +1532,19 @@ onMounted(() => {
 /* Ensure grid items don't overflow */
 .vue-grid-item {
   transition: all 200ms ease;
+}
+
+/* Animated counter transition */
+.counter-fade-enter-active,
+.counter-fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.counter-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.counter-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 </style>

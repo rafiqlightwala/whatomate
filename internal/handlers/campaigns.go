@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/internal/queue"
+	"github.com/shridarpatil/whatomate/internal/utils"
 	"github.com/shridarpatil/whatomate/internal/websocket"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
@@ -697,8 +698,8 @@ func (a *App) GetCampaignRecipients(r *fastglue.Request) error {
 
 	if a.ShouldMaskPhoneNumbers(orgID) {
 		for i := range recipients {
-			recipients[i].PhoneNumber = MaskPhoneNumber(recipients[i].PhoneNumber)
-			recipients[i].RecipientName = MaskIfPhoneNumber(recipients[i].RecipientName)
+			recipients[i].PhoneNumber = utils.MaskPhoneNumber(recipients[i].PhoneNumber)
+			recipients[i].RecipientName = utils.MaskIfPhoneNumber(recipients[i].RecipientName)
 		}
 	}
 
@@ -812,6 +813,7 @@ func (a *App) UploadCampaignMedia(r *fastglue.Request) error {
 	const maxMediaSize = 16 << 20 // 16MB
 	data, err := io.ReadAll(io.LimitReader(file, maxMediaSize+1))
 	if err != nil {
+		a.Log.Error("Failed to read file", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to read file", nil, "")
 	}
 	if len(data) > maxMediaSize {
@@ -934,6 +936,7 @@ func (a *App) ServeCampaignMedia(r *fastglue.Request) error {
 	filePath := filepath.Clean(campaign.HeaderMediaLocalPath)
 	baseDir, err := filepath.Abs(a.getMediaStoragePath())
 	if err != nil {
+		a.Log.Error("Storage configuration error", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Storage configuration error", nil, "")
 	}
 	fullPath, err := filepath.Abs(filepath.Join(baseDir, filePath))
@@ -1037,6 +1040,7 @@ func (a *App) incrementCampaignStat(campaignID string, status string) {
 			Type: websocket.TypeCampaignStatsUpdate,
 			Payload: map[string]interface{}{
 				"campaign_id":     campaignID,
+				"status":          campaign.Status,
 				"sent_count":      campaign.SentCount,
 				"delivered_count": campaign.DeliveredCount,
 				"read_count":      campaign.ReadCount,

@@ -27,7 +27,7 @@ import {
 import { chatbotService } from '@/services/api'
 import { useCrudState } from '@/composables/useCrudState'
 import { toast } from 'vue-sonner'
-import { PageHeader, DataTable, DeleteConfirmDialog, SearchInput, type Column } from '@/components/shared'
+import { PageHeader, DataTable, DeleteConfirmDialog, SearchInput, IconButton, ErrorState, type Column } from '@/components/shared'
 import { getErrorMessage } from '@/lib/api-utils'
 import { Plus, Pencil, Trash2, Sparkles } from 'lucide-vue-next'
 import { useDebounceFn } from '@vueuse/core'
@@ -75,6 +75,8 @@ const defaultFormData: AIContextFormData = {
 
 const contexts = ref<AIContext[]>([])
 const isLoading = ref(true)
+const isDeleting = ref(false)
+const error = ref<string | null>(null)
 const searchQuery = ref('')
 const {
   isSubmitting, isDialogOpen, editingItem: editingContext, deleteDialogOpen, itemToDelete: contextToDelete,
@@ -107,6 +109,7 @@ onMounted(async () => {
 
 async function fetchContexts() {
   isLoading.value = true
+  error.value = null
   try {
     const response = await chatbotService.listAIContexts({
       search: searchQuery.value || undefined,
@@ -117,8 +120,9 @@ async function fetchContexts() {
     const data = (response.data as any).data || response.data
     contexts.value = data.contexts || []
     totalItems.value = data.total ?? contexts.value.length
-  } catch (error) {
-    console.error('Failed to load AI contexts:', error)
+  } catch (err) {
+    console.error('Failed to load AI contexts:', err)
+    error.value = t('aiContexts.fetchError')
     contexts.value = []
   } finally {
     isLoading.value = false
@@ -217,6 +221,7 @@ async function saveContext() {
 async function confirmDeleteContext() {
   if (!contextToDelete.value) return
 
+  isDeleting.value = true
   try {
     await chatbotService.deleteAIContext(contextToDelete.value.id)
     toast.success(t('common.deletedSuccess', { resource: t('resources.AIContext') }))
@@ -224,6 +229,8 @@ async function confirmDeleteContext() {
     await fetchContexts()
   } catch (error: any) {
     toast.error(getErrorMessage(error, t('common.failedDelete', { resource: t('resources.AIContext') })))
+  } finally {
+    isDeleting.value = false
   }
 }
 
@@ -269,7 +276,15 @@ async function toggleContext(context: AIContext) {
               </div>
             </CardHeader>
             <CardContent>
+              <ErrorState
+                v-if="error"
+                :title="$t('common.loadErrorTitle')"
+                :description="error"
+                :retry-label="$t('common.retry')"
+                @retry="fetchContexts"
+              />
               <DataTable
+                v-else
                 :items="contexts"
                 :columns="columns"
                 :is-loading="isLoading"
@@ -320,12 +335,8 @@ async function toggleContext(context: AIContext) {
                 </template>
                 <template #cell-actions="{ item: context }">
                   <div class="flex items-center justify-end gap-1">
-                    <Button variant="ghost" size="icon" class="h-8 w-8" @click="openEditDialog(context)">
-                      <Pencil class="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive" @click="openDeleteDialog(context)">
-                      <Trash2 class="h-4 w-4" />
-                    </Button>
+                    <IconButton :icon="Pencil" :label="$t('aiContexts.editContextLabel')" class="h-8 w-8" @click="openEditDialog(context)" />
+                    <IconButton :icon="Trash2" :label="$t('aiContexts.deleteContextLabel')" class="h-8 w-8 text-destructive" @click="openDeleteDialog(context)" />
                   </div>
                 </template>
                 <template #empty-action>
@@ -488,6 +499,7 @@ async function toggleContext(context: AIContext) {
       v-model:open="deleteDialogOpen"
       :title="$t('aiContexts.deleteContext')"
       :item-name="contextToDelete?.name"
+      :is-submitting="isDeleting"
       @confirm="confirmDeleteContext"
     />
   </div>

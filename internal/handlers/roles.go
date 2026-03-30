@@ -240,9 +240,7 @@ func (a *App) UpdateRole(r *fastglue.Request) error {
 		}
 
 		// Invalidate permissions cache for all users with this role
-		if isSuperAdmin && len(req.Permissions) > 0 {
-			a.InvalidateRolePermissionsCache(role.ID)
-		}
+		a.InvalidateRolePermissionsCache(role.ID)
 
 		var userCount int64
 		a.DB.Model(&models.User{}).Where("role_id = ?", role.ID).Count(&userCount)

@@ -133,10 +133,7 @@ test.describe('Account Card Actions', () => {
     // Account cards have h3 with account name
     const accountCard = page.locator('.rounded-xl.border').filter({ has: page.locator('h3') }).first()
     if (await accountCard.isVisible()) {
-      // Edit button is an icon-only button (has svg but no text-destructive class)
-      // It's the icon button that's NOT the delete button
-      const iconButtons = accountCard.locator('button:has(svg.h-4)').filter({ hasNot: page.locator('span') })
-      const editBtn = iconButtons.first()
+      const editBtn = accountCard.getByRole('button', { name: /edit/i })
       await expect(editBtn).toBeVisible()
     }
   })
@@ -153,9 +150,7 @@ test.describe('Account Card Actions', () => {
   test('should open edit dialog when clicking edit', async ({ page }) => {
     const accountCard = page.locator('.rounded-xl.border').filter({ has: page.locator('h3') }).first()
     if (await accountCard.isVisible()) {
-      // Edit button is the first icon-only button (without text-destructive)
-      const iconButtons = accountCard.locator('button:has(svg.h-4)').filter({ hasNot: page.locator('span') })
-      await iconButtons.first().click()
+      await accountCard.getByRole('button', { name: /edit/i }).click()
       await accountsPage.expectDialogVisible()
       await expect(accountsPage.dialog).toContainText('Edit')
     }

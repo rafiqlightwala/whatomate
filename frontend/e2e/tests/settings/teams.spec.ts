@@ -306,6 +306,12 @@ test.describe('Team Members', () => {
 
       if (await removeMemberButton.isVisible()) {
         await removeMemberButton.click()
+
+        // Wait for the confirmation dialog to appear and confirm the removal
+        const confirmDialog = page.getByRole('alertdialog')
+        await expect(confirmDialog).toBeVisible()
+        await confirmDialog.getByRole('button', { name: /Remove/i }).click()
+
         await page.waitForTimeout(500)
 
         // Verify member count decreased or "No members yet" message appears

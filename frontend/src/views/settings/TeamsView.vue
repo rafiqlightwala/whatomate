@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { PageHeader, SearchInput, DataTable, CrudFormDialog, DeleteConfirmDialog, type Column } from '@/components/shared'
+import { PageHeader, SearchInput, DataTable, CrudFormDialog, DeleteConfirmDialog, ConfirmDialog, ErrorState, type Column } from '@/components/shared'
 import { useTeamsStore } from '@/stores/teams'
 import { useUsersStore, type User } from '@/stores/users'
 import { useAuthStore } from '@/stores/auth'
@@ -37,10 +37,11 @@ interface TeamFormData {
   name: string
   description: string
   assignment_strategy: 'round_robin' | 'load_balanced' | 'manual'
+  per_agent_timeout_secs: number
   is_active: boolean
 }
 
-const defaultFormData: TeamFormData = { name: '', description: '', assignment_strategy: 'round_robin', is_active: true }
+const defaultFormData: TeamFormData = { name: '', description: '', assignment_strategy: 'round_robin', per_agent_timeout_secs: 0, is_active: true }
 
 const {
   isLoading, isSubmitting, isDialogOpen, editingItem: editingTeam, deleteDialogOpen, itemToDelete: teamToDelete,
@@ -74,7 +75,19 @@ const selectedTeam = ref<Team | null>(null)
 const teamMembers = ref<TeamMember[]>([])
 const loadingMembers = ref(false)
 
-const isAdmin = computed(() => authStore.userRole === 'admin')
+// Remove member confirmation
+const removeMemberDialogOpen = ref(false)
+const memberToRemove = ref<TeamMember | null>(null)
+const isRemovingMember = ref(false)
+
+// Delete team submitting state
+const isDeletingTeam = ref(false)
+
+// Fetch error state
+const fetchError = ref(false)
+
+const canWriteTeams = computed(() => authStore.hasPermission('teams', 'write'))
+const canDeleteTeams = computed(() => authStore.hasPermission('teams', 'delete'))
 const breadcrumbs = computed(() => [{ label: t('nav.settings'), href: '/settings' }, { label: t('nav.teams') }])
 
 const availableUsers = computed(() => {
@@ -96,7 +109,7 @@ const sortKey = ref('name')
 const sortDirection = ref<'asc' | 'desc'>('asc')
 
 function openEditDialog(team: Team) {
-  baseOpenEditDialog(team, (t) => ({ name: t.name, description: t.description || '', assignment_strategy: t.assignment_strategy, is_active: t.is_active }))
+  baseOpenEditDialog(team, (t) => ({ name: t.name, description: t.description || '', assignment_strategy: t.assignment_strategy, per_agent_timeout_secs: t.per_agent_timeout_secs || 0, is_active: t.is_active }))
 }
 
 watch(() => organizationsStore.selectedOrgId, () => { fetchTeams(); usersStore.fetchUsers() })
@@ -104,6 +117,7 @@ onMounted(() => { fetchTeams(); usersStore.fetchUsers() })
 
 async function fetchTeams() {
   isLoading.value = true
+  fetchError.value = false
   try {
     const response = await teamsStore.fetchTeams({
       search: searchQuery.value || undefined,
@@ -112,7 +126,10 @@ async function fetchTeams() {
     })
     teams.value = response.teams
     totalItems.value = response.total
-  } catch { toast.error(t('common.failedLoad', { resource: t('resources.teams') })) }
+  } catch {
+    fetchError.value = true
+    toast.error(t('common.failedLoad', { resource: t('resources.teams') }))
+  }
   finally { isLoading.value = false }
 }
 
@@ -121,10 +138,10 @@ async function saveTeam() {
   isSubmitting.value = true
   try {
     if (editingTeam.value) {
-      await teamsStore.updateTeam(editingTeam.value.id, { name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy, is_active: formData.value.is_active })
+      await teamsStore.updateTeam(editingTeam.value.id, { name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy, per_agent_timeout_secs: formData.value.per_agent_timeout_secs, is_active: formData.value.is_active })
       toast.success(t('common.updatedSuccess', { resource: t('resources.Team') }))
     } else {
-      await teamsStore.createTeam({ name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy })
+      await teamsStore.createTeam({ name: formData.value.name, description: formData.value.description, assignment_strategy: formData.value.assignment_strategy, per_agent_timeout_secs: formData.value.per_agent_timeout_secs })
       toast.success(t('common.createdSuccess', { resource: t('resources.Team') }))
     }
     closeDialog()
@@ -135,8 +152,10 @@ async function saveTeam() {
 
 async function confirmDelete() {
   if (!teamToDelete.value) return
+  isDeletingTeam.value = true
   try { await teamsStore.deleteTeam(teamToDelete.value.id); toast.success(t('common.deletedSuccess', { resource: t('resources.Team') })); closeDeleteDialog(); await fetchTeams() }
   catch (e) { toast.error(getErrorMessage(e, t('common.failedDelete', { resource: t('resources.team') }))) }
+  finally { isDeletingTeam.value = false }
 }
 
 async function openMembersDialog(team: Team) {
@@ -157,13 +176,22 @@ async function addMember(user: User, role: 'manager' | 'agent' = 'agent') {
   } catch (e) { toast.error(getErrorMessage(e, t('common.failedSave', { resource: t('resources.member') }))) }
 }
 
-async function removeMember(member: TeamMember) {
-  if (!selectedTeam.value) return
+function openRemoveMemberDialog(member: TeamMember) {
+  memberToRemove.value = member
+  removeMemberDialogOpen.value = true
+}
+
+async function confirmRemoveMember() {
+  if (!selectedTeam.value || !memberToRemove.value) return
+  isRemovingMember.value = true
   try {
-    await teamsStore.removeTeamMember(selectedTeam.value.id, member.user_id)
-    teamMembers.value = teamMembers.value.filter(m => m.user_id !== member.user_id)
+    await teamsStore.removeTeamMember(selectedTeam.value.id, memberToRemove.value.user_id)
+    teamMembers.value = teamMembers.value.filter(m => m.user_id !== memberToRemove.value!.user_id)
     toast.success(t('teams.memberRemoved'))
+    removeMemberDialogOpen.value = false
+    memberToRemove.value = null
   } catch (e) { toast.error(getErrorMessage(e, t('common.failedDelete', { resource: t('resources.member') }))) }
+  finally { isRemovingMember.value = false }
 }
 
 function getStrategyLabel(strategy: string): string { return getLabelFromValue(ASSIGNMENT_STRATEGIES, strategy) }
@@ -174,11 +202,20 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
   <div class="flex flex-col h-full bg-[#0a0a0b] light:bg-gray-50">
     <PageHeader :title="$t('teams.title')" :icon="Users" icon-gradient="bg-gradient-to-br from-cyan-500 to-blue-600 shadow-cyan-500/20" back-link="/settings" :breadcrumbs="breadcrumbs">
       <template #actions>
-        <Button v-if="isAdmin" variant="outline" size="sm" @click="openCreateDialog"><Plus class="h-4 w-4 mr-2" />{{ $t('teams.addTeam') }}</Button>
+        <Button v-if="canWriteTeams" variant="outline" size="sm" @click="openCreateDialog"><Plus class="h-4 w-4 mr-2" />{{ $t('teams.addTeam') }}</Button>
       </template>
     </PageHeader>
 
-    <ScrollArea class="flex-1">
+    <ErrorState
+      v-if="fetchError && !isLoading"
+      :title="$t('teams.fetchErrorTitle')"
+      :description="$t('teams.fetchErrorDescription')"
+      :retry-label="$t('common.retry')"
+      class="flex-1"
+      @retry="fetchTeams"
+    />
+
+    <ScrollArea v-else class="flex-1">
       <div class="p-6">
         <div class="max-w-6xl mx-auto">
           <Card>
@@ -194,7 +231,7 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
             <CardContent>
               <DataTable :items="teams" :columns="columns" :is-loading="isLoading" :empty-icon="Users" :empty-title="searchQuery ? $t('teams.noMatchingTeams') : $t('teams.noTeamsYet')" :empty-description="searchQuery ? $t('teams.noMatchingTeamsDesc') : $t('teams.noTeamsYetDesc')" v-model:sort-key="sortKey" v-model:sort-direction="sortDirection" server-pagination :current-page="currentPage" :total-items="totalItems" :page-size="pageSize" item-name="teams" @page-change="handlePageChange">
                 <template #empty-action>
-                  <Button v-if="isAdmin" variant="outline" size="sm" @click="openCreateDialog"><Plus class="h-4 w-4 mr-2" />{{ $t('teams.addTeam') }}</Button>
+                  <Button v-if="canWriteTeams" variant="outline" size="sm" @click="openCreateDialog"><Plus class="h-4 w-4 mr-2" />{{ $t('teams.addTeam') }}</Button>
                 </template>
                 <template #cell-team="{ item: team }">
                   <div class="flex items-center gap-3">
@@ -224,7 +261,7 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
                   <div class="flex items-center justify-end gap-1">
                     <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" class="h-8 w-8" @click="openMembersDialog(team)"><UserPlus class="h-4 w-4" /></Button></TooltipTrigger><TooltipContent>{{ $t('teams.manageMembers') }}</TooltipContent></Tooltip>
                     <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" class="h-8 w-8" @click="openEditDialog(team)"><Pencil class="h-4 w-4" /></Button></TooltipTrigger><TooltipContent>{{ $t('teams.editTeamTooltip') }}</TooltipContent></Tooltip>
-                    <Tooltip v-if="isAdmin"><TooltipTrigger as-child><Button variant="ghost" size="icon" class="h-8 w-8" @click="openDeleteDialog(team)"><Trash2 class="h-4 w-4 text-destructive" /></Button></TooltipTrigger><TooltipContent>{{ $t('teams.deleteTeamTooltip') }}</TooltipContent></Tooltip>
+                    <Tooltip v-if="canDeleteTeams"><TooltipTrigger as-child><Button variant="ghost" size="icon" class="h-8 w-8" @click="openDeleteDialog(team)"><Trash2 class="h-4 w-4 text-destructive" /></Button></TooltipTrigger><TooltipContent>{{ $t('teams.deleteTeamTooltip') }}</TooltipContent></Tooltip>
                   </div>
                 </template>
               </DataTable>
@@ -241,6 +278,14 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
         <div class="space-y-2">
           <Label for="strategy">{{ $t('teams.assignmentStrategy') }}</Label>
           <Select v-model="formData.assignment_strategy"><SelectTrigger><SelectValue :placeholder="$t('teams.selectStrategy')" /></SelectTrigger><SelectContent><SelectItem value="round_robin"><div class="flex items-center gap-2"><RotateCcw class="h-4 w-4" />{{ $t('teams.roundRobin') }}</div></SelectItem><SelectItem value="load_balanced"><div class="flex items-center gap-2"><Scale class="h-4 w-4" />{{ $t('teams.loadBalanced') }}</div></SelectItem><SelectItem value="manual"><div class="flex items-center gap-2"><Hand class="h-4 w-4" />{{ $t('teams.manualQueue') }}</div></SelectItem></SelectContent></Select>
+        </div>
+        <div v-if="formData.assignment_strategy !== 'manual'" class="space-y-2">
+          <Label for="per_agent_timeout">{{ $t('teams.perAgentTimeout') }}</Label>
+          <div class="flex items-center gap-2">
+            <Input id="per_agent_timeout" v-model.number="formData.per_agent_timeout_secs" type="number" min="0" max="300" :placeholder="$t('teams.perAgentTimeoutPlaceholder')" class="w-32" />
+            <span class="text-sm text-muted-foreground">{{ $t('teams.seconds') }}</span>
+          </div>
+          <p class="text-xs text-muted-foreground">{{ $t('teams.perAgentTimeoutHint') }}</p>
         </div>
         <div v-if="editingTeam" class="flex items-center justify-between"><Label for="is_active" class="font-normal cursor-pointer">{{ $t('teams.teamActive') }}</Label><Switch id="is_active" :checked="formData.is_active" @update:checked="formData.is_active = $event" /></div>
       </div>
@@ -266,7 +311,7 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
                 </div>
                 <div class="flex items-center gap-2">
                   <Badge variant="outline" class="text-xs">{{ member.role }}</Badge>
-                  <Button variant="ghost" size="icon" class="h-7 w-7" @click="removeMember(member)"><UserMinus class="h-4 w-4 text-destructive" /></Button>
+                  <Button variant="ghost" size="icon" class="h-7 w-7" @click="openRemoveMemberDialog(member)"><UserMinus class="h-4 w-4 text-destructive" /></Button>
                 </div>
               </div>
             </div>
@@ -281,7 +326,7 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
                 </div>
                 <div class="flex items-center gap-1">
                   <Button variant="outline" size="sm" class="h-7 text-xs" @click="addMember(user, 'agent')">{{ $t('teams.addAsAgent') }}</Button>
-                  <Button v-if="isAdmin" variant="outline" size="sm" class="h-7 text-xs" @click="addMember(user, 'manager')">{{ $t('teams.addAsManager') }}</Button>
+                  <Button v-if="canWriteTeams" variant="outline" size="sm" class="h-7 text-xs" @click="addMember(user, 'manager')">{{ $t('teams.addAsManager') }}</Button>
                 </div>
               </div>
             </div>
@@ -292,6 +337,17 @@ function getStrategyIcon(strategy: string) { return { round_robin: RotateCcw, lo
       </DialogContent>
     </Dialog>
 
-    <DeleteConfirmDialog v-model:open="deleteDialogOpen" :title="$t('teams.deleteTeam')" :item-name="teamToDelete?.name" :description="$t('teams.deleteTeamWarning')" @confirm="confirmDelete" />
+    <DeleteConfirmDialog v-model:open="deleteDialogOpen" :title="$t('teams.deleteTeam')" :item-name="teamToDelete?.name" :description="$t('teams.deleteTeamWarning')" :is-submitting="isDeletingTeam" @confirm="confirmDelete" />
+
+    <!-- Remove Member Confirmation -->
+    <ConfirmDialog
+      v-model:open="removeMemberDialogOpen"
+      :title="$t('teams.confirmRemoveMemberTitle')"
+      :description="$t('teams.confirmRemoveMemberDescription', { name: memberToRemove?.full_name || memberToRemove?.user?.full_name || '' })"
+      :confirm-label="$t('common.remove')"
+      variant="destructive"
+      :is-submitting="isRemovingMember"
+      @confirm="confirmRemoveMember"
+    />
   </div>
 </template>

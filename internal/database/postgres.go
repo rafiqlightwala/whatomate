@@ -104,6 +104,12 @@ func GetMigrationModels() []MigrationModel {
 
 		// Conversation Notes
 		{"ConversationNote", &models.ConversationNote{}},
+
+		// Calling / IVR
+		{"CallLog", &models.CallLog{}},
+		{"IVRFlow", &models.IVRFlow{}},
+		{"CallTransfer", &models.CallTransfer{}},
+		{"CallPermission", &models.CallPermission{}},
 	}
 }
 
@@ -267,6 +273,13 @@ func getIndexes() []string {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_org_unique ON user_organizations(user_id, organization_id) WHERE deleted_at IS NULL`,
 		// Conversation notes
 		`CREATE INDEX IF NOT EXISTS idx_conversation_notes_contact ON conversation_notes(organization_id, contact_id, created_at DESC)`,
+		// Call logs
+		`CREATE INDEX IF NOT EXISTS idx_call_logs_org_status ON call_logs(organization_id, status, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_call_logs_contact ON call_logs(contact_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_call_logs_wa_call_id ON call_logs(whatsapp_call_id) WHERE whatsapp_call_id != ''`,
+		// IVR flows
+		`CREATE INDEX IF NOT EXISTS idx_ivr_flows_org_active ON ivr_flows(organization_id, whatsapp_account, is_active)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ivr_flows_org_call_start ON ivr_flows(organization_id, whatsapp_account) WHERE is_call_start = true AND is_active = true AND deleted_at IS NULL`,
 	}
 }
 
@@ -652,7 +665,25 @@ func SeedDefaultWidgets(db *gorm.DB) error {
 		return fmt.Errorf("failed to fetch organizations: %w", err)
 	}
 
-	// Default widget definitions
+	for _, org := range orgs {
+		// Skip orgs that already have widgets
+		var exists int64
+		db.Model(&models.Widget{}).Where("organization_id = ?", org.ID).Count(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		if err := SeedDefaultWidgetsForOrg(db, org.ID, superAdmin.ID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// SeedDefaultWidgetsForOrg creates default dashboard widgets for a single organization.
+// Used when a new organization is created at runtime.
+func SeedDefaultWidgetsForOrg(db *gorm.DB, orgID, userID uuid.UUID) error {
 	defaultWidgetsData := []struct {
 		Name         string
 		Description  string
@@ -674,42 +705,34 @@ func SeedDefaultWidgets(db *gorm.DB) error {
 		{"Quick Actions", "Common tasks and shortcuts", "shortcuts", "shortcuts", "", models.JSONB{"shortcuts": []interface{}{"chat", "campaigns", "templates", "chatbot"}}, 6, 6, 3, 6, 8},
 	}
 
-	for _, org := range orgs {
-		// Create default widgets owned by super admin
-		for _, wd := range defaultWidgetsData {
-			// Skip if a widget with this name already exists for the org
-			var exists int64
-			db.Model(&models.Widget{}).Where("organization_id = ? AND name = ?", org.ID, wd.Name).Count(&exists)
-			if exists > 0 {
-				continue
-			}
-
-			displayType := wd.DisplayType
-			if displayType == "" {
-				displayType = "number"
-			}
-			widget := models.Widget{
-				BaseModel:      models.BaseModel{ID: uuid.New()},
-				OrganizationID: org.ID,
-				UserID:         &superAdmin.ID,
-				Name:           wd.Name,
-				Description:    wd.Description,
-				DataSource:     wd.DataSource,
-				Metric:         "count",
-				DisplayType:    displayType,
-				ShowChange:     displayType == "number",
-				Color:          wd.Color,
-				Size:           "small",
-				Config:         wd.Config,
-				DisplayOrder:   wd.DisplayOrder,
-				GridX:          wd.GridX,
-				GridY:          wd.GridY,
-				GridW:          wd.GridW,
-				GridH:          wd.GridH,
-				IsShared:       true,
-				IsDefault:      true,
-			}
-			db.Create(&widget)
+	for _, wd := range defaultWidgetsData {
+		displayType := wd.DisplayType
+		if displayType == "" {
+			displayType = "number"
+		}
+		widget := models.Widget{
+			BaseModel:      models.BaseModel{ID: uuid.New()},
+			OrganizationID: orgID,
+			UserID:         &userID,
+			Name:           wd.Name,
+			Description:    wd.Description,
+			DataSource:     wd.DataSource,
+			Metric:         "count",
+			DisplayType:    displayType,
+			ShowChange:     displayType == "number",
+			Color:          wd.Color,
+			Size:           "small",
+			Config:         wd.Config,
+			DisplayOrder:   wd.DisplayOrder,
+			GridX:          wd.GridX,
+			GridY:          wd.GridY,
+			GridW:          wd.GridW,
+			GridH:          wd.GridH,
+			IsShared:       true,
+			IsDefault:      true,
+		}
+		if err := db.Create(&widget).Error; err != nil {
+			return fmt.Errorf("failed to create widget %s: %w", wd.Name, err)
 		}
 	}
 

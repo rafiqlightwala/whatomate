@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shridarpatil/whatomate/internal/models"
-	"github.com/shridarpatil/whatomate/internal/websocket"
+	"github.com/shridarpatil/whatomate/internal/utils"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
@@ -168,8 +168,8 @@ func (a *App) ListContacts(r *fastglue.Request) error {
 		phoneNumber := c.PhoneNumber
 		profileName := c.ProfileName
 		if shouldMask {
-			phoneNumber = MaskPhoneNumber(phoneNumber)
-			profileName = MaskIfPhoneNumber(profileName)
+			phoneNumber = utils.MaskPhoneNumber(phoneNumber)
+			profileName = utils.MaskIfPhoneNumber(profileName)
 		}
 
 		serviceWindowOpen := c.LastInboundAt != nil && time.Since(*c.LastInboundAt) < 24*time.Hour
@@ -245,8 +245,8 @@ func (a *App) GetContact(r *fastglue.Request) error {
 	profileName := contact.ProfileName
 	shouldMask := a.ShouldMaskPhoneNumbers(orgID)
 	if shouldMask {
-		phoneNumber = MaskPhoneNumber(phoneNumber)
-		profileName = MaskIfPhoneNumber(profileName)
+		phoneNumber = utils.MaskPhoneNumber(phoneNumber)
+		profileName = utils.MaskIfPhoneNumber(profileName)
 	}
 
 	response := ContactResponse{
@@ -620,6 +620,7 @@ func (a *App) SendMessage(r *fastglue.Request) error {
 	ctx := context.Background()
 	message, err := a.SendOutgoingMessage(ctx, msgReq, opts)
 	if err != nil {
+		a.Log.Error("Failed to send message", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to send message", nil, "")
 	}
 
@@ -751,6 +752,7 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 	// Read file data
 	fileData, err := io.ReadAll(file)
 	if err != nil {
+		a.Log.Error("Failed to read file data", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to read file data", nil, "")
 	}
 
@@ -807,6 +809,7 @@ func (a *App) SendMediaMessage(r *fastglue.Request) error {
 	ctx := context.Background()
 	message, err := a.SendOutgoingMessage(ctx, msgReq, opts)
 	if err != nil {
+		a.Log.Error("Failed to send message", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to send message", nil, "")
 	}
 
@@ -990,16 +993,7 @@ func (a *App) SendReaction(r *fastglue.Request) error {
 	go a.sendWhatsAppReaction(account, &contact, &message, req.Emoji)
 
 	// Broadcast via WebSocket
-	if a.WSHub != nil {
-		a.WSHub.BroadcastToOrg(orgID, websocket.WSMessage{
-			Type: "reaction_update",
-			Payload: map[string]any{
-				"message_id": message.ID.String(),
-				"contact_id": contact.ID.String(),
-				"reactions":  newReactions,
-			},
-		})
-	}
+	a.broadcastReactionUpdate(orgID, message.ID, contact.ID, newReactions)
 
 	return r.SendEnvelope(map[string]any{
 		"message_id": message.ID.String(),
@@ -1610,8 +1604,8 @@ func (a *App) buildContactResponse(contact *models.Contact, orgID uuid.UUID) Con
 	profileName := contact.ProfileName
 	shouldMask := a.ShouldMaskPhoneNumbers(orgID)
 	if shouldMask {
-		phoneNumber = MaskPhoneNumber(phoneNumber)
-		profileName = MaskIfPhoneNumber(profileName)
+		phoneNumber = utils.MaskPhoneNumber(phoneNumber)
+		profileName = utils.MaskIfPhoneNumber(profileName)
 	}
 
 	// 24-hour service window: open if customer messaged within the last 24 hours.

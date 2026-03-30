@@ -8,8 +8,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/shridarpatil/whatomate/internal/assignment"
+	"github.com/shridarpatil/whatomate/internal/calling"
 	"github.com/shridarpatil/whatomate/internal/config"
 	"github.com/shridarpatil/whatomate/internal/queue"
+	"github.com/shridarpatil/whatomate/internal/storage"
+	"github.com/shridarpatil/whatomate/internal/tts"
 	"github.com/shridarpatil/whatomate/internal/websocket"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
@@ -30,6 +34,14 @@ type App struct {
 	CampaignSubCancel context.CancelFunc
 	// HTTPClient is a shared HTTP client with connection pooling for external API calls
 	HTTPClient *http.Client
+	// Assigner provides shared team-based agent assignment (used by both chat and call transfers)
+	Assigner *assignment.Assigner
+	// CallManager handles WebRTC call sessions (nil when calling is disabled)
+	CallManager *calling.Manager
+	// TTS generates audio from text for IVR greetings (nil when not configured)
+	TTS *tts.PiperTTS
+	// S3Client for serving call recording presigned URLs (nil when not configured)
+	S3Client *storage.S3Client
 	// wg tracks background goroutines for graceful shutdown
 	wg sync.WaitGroup
 }
@@ -103,14 +115,17 @@ func (a *App) ReadyCheck(r *fastglue.Request) error {
 	// Check database connection
 	sqlDB, err := a.DB.DB()
 	if err != nil {
+		a.Log.Error("Database connection error", "error", err)
 		return r.SendErrorEnvelope(500, "Database connection error", nil, "")
 	}
 	if err := sqlDB.Ping(); err != nil {
+		a.Log.Error("Database ping failed", "error", err)
 		return r.SendErrorEnvelope(500, "Database ping failed", nil, "")
 	}
 
 	// Check Redis connection
 	if err := a.Redis.Ping(r.RequestCtx).Err(); err != nil {
+		a.Log.Error("Redis connection error", "error", err)
 		return r.SendErrorEnvelope(500, "Redis connection error", nil, "")
 	}
 
@@ -200,7 +215,12 @@ func (a *App) getOrgAndUserID(r *fastglue.Request) (orgID, userID uuid.UUID, err
 // Returns nil if permitted, otherwise sends a 403 error envelope and returns errEnvelopeSent.
 // Automatically extracts orgID from the request for org-aware permission checks.
 func (a *App) requirePermission(r *fastglue.Request, userID uuid.UUID, resource, action string) error {
-	orgID, _ := a.getOrgID(r)
+	orgID, err := a.getOrgID(r)
+	if err != nil {
+		a.Log.Error("Failed to get organization ID for permission check", "error", err, "user_id", userID)
+		_ = r.SendErrorEnvelope(fasthttp.StatusForbidden, "Insufficient permissions", nil, "")
+		return errEnvelopeSent
+	}
 	if !a.HasPermission(userID, resource, action, orgID) {
 		_ = r.SendErrorEnvelope(fasthttp.StatusForbidden, "Insufficient permissions", nil, "")
 		return errEnvelopeSent

@@ -374,6 +374,7 @@ func (a *App) UpdateChatbotSettings(r *fastglue.Request) error {
 	}
 
 	if err := a.DB.Save(&settings).Error; err != nil {
+		a.Log.Error("Failed to save settings", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to save settings", nil, "")
 	}
 
@@ -394,6 +395,7 @@ func (a *App) UpdateChatbotSettings(r *fastglue.Request) error {
 		}
 		if len(zeroOverrides) > 0 {
 			if err := a.DB.Model(&settings).Updates(zeroOverrides).Error; err != nil {
+				a.Log.Error("Failed to save settings", "error", err)
 				return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to save settings", nil, "")
 			}
 		}
@@ -433,6 +435,7 @@ func (a *App) ListKeywordRules(r *fastglue.Request) error {
 	var rules []models.KeywordRule
 	if err := pg.Apply(query.Order("priority DESC, created_at DESC")).
 		Find(&rules).Error; err != nil {
+		a.Log.Error("Failed to fetch keyword rules", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to fetch keyword rules", nil, "")
 	}
 
@@ -509,6 +512,7 @@ func (a *App) CreateKeywordRule(r *fastglue.Request) error {
 	}
 
 	if err := a.DB.Create(&rule).Error; err != nil {
+		a.Log.Error("Failed to create keyword rule", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create keyword rule", nil, "")
 	}
 
@@ -609,6 +613,7 @@ func (a *App) UpdateKeywordRule(r *fastglue.Request) error {
 	}
 
 	if err := a.DB.Save(rule).Error; err != nil {
+		a.Log.Error("Failed to update keyword rule", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update keyword rule", nil, "")
 	}
 
@@ -634,6 +639,7 @@ func (a *App) DeleteKeywordRule(r *fastglue.Request) error {
 
 	result := a.DB.Where("id = ? AND organization_id = ?", id, orgID).Delete(&models.KeywordRule{})
 	if result.Error != nil {
+		a.Log.Error("Failed to delete keyword rule", "error", result.Error)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete keyword rule", nil, "")
 	}
 	if result.RowsAffected == 0 {
@@ -676,6 +682,7 @@ func (a *App) ListChatbotFlows(r *fastglue.Request) error {
 	var flows []models.ChatbotFlow
 	if err := pg.Apply(query.Preload("Steps").Order("created_at DESC")).
 		Find(&flows).Error; err != nil {
+		a.Log.Error("Failed to fetch flows", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to fetch flows", nil, "")
 	}
 
@@ -741,6 +748,7 @@ func (a *App) CreateChatbotFlow(r *fastglue.Request) error {
 		OnCompleteAction  string                 `json:"on_complete_action"`
 		CompletionConfig  map[string]interface{} `json:"completion_config"`
 		PanelConfig       map[string]interface{} `json:"panel_config"`
+		CanvasLayout      map[string]interface{} `json:"canvas_layout"`
 		Enabled           bool                   `json:"enabled"`
 		Steps             []FlowStepRequest      `json:"steps"`
 	}
@@ -768,11 +776,13 @@ func (a *App) CreateChatbotFlow(r *fastglue.Request) error {
 		OnCompleteAction:  req.OnCompleteAction,
 		CompletionConfig:  models.JSONB(req.CompletionConfig),
 		PanelConfig:       models.JSONB(req.PanelConfig),
+		CanvasLayout:      models.JSONB(req.CanvasLayout),
 		IsEnabled:         req.Enabled,
 	}
 
 	if err := tx.Create(&flow).Error; err != nil {
 		tx.Rollback()
+		a.Log.Error("Failed to create flow", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create flow", nil, "")
 	}
 
@@ -813,6 +823,7 @@ func (a *App) CreateChatbotFlow(r *fastglue.Request) error {
 		}
 		if err := tx.Create(&step).Error; err != nil {
 			tx.Rollback()
+			a.Log.Error("Failed to create flow step", "error", err)
 			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create flow step", nil, "")
 		}
 	}
@@ -886,6 +897,7 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 		OnCompleteAction  *string                `json:"on_complete_action"`
 		CompletionConfig  map[string]interface{} `json:"completion_config"`
 		PanelConfig       map[string]interface{} `json:"panel_config"`
+		CanvasLayout      map[string]interface{} `json:"canvas_layout"`
 		Enabled           *bool                  `json:"enabled"`
 		Steps             []FlowStepRequest      `json:"steps"`
 	}
@@ -920,12 +932,16 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 	if req.PanelConfig != nil {
 		flow.PanelConfig = models.JSONB(req.PanelConfig)
 	}
+	if req.CanvasLayout != nil {
+		flow.CanvasLayout = models.JSONB(req.CanvasLayout)
+	}
 	if req.Enabled != nil {
 		flow.IsEnabled = *req.Enabled
 	}
 
 	if err := tx.Save(flow).Error; err != nil {
 		tx.Rollback()
+		a.Log.Error("Failed to update flow", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update flow", nil, "")
 	}
 
@@ -934,6 +950,7 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 		// Delete existing steps
 		if err := tx.Where("flow_id = ?", id).Delete(&models.ChatbotFlowStep{}).Error; err != nil {
 			tx.Rollback()
+			a.Log.Error("Failed to update flow steps", "error", err)
 			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update flow steps", nil, "")
 		}
 
@@ -974,6 +991,7 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 			}
 			if err := tx.Create(&step).Error; err != nil {
 				tx.Rollback()
+				a.Log.Error("Failed to create flow step", "error", err)
 				return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create flow step", nil, "")
 			}
 		}
@@ -1011,6 +1029,7 @@ func (a *App) DeleteChatbotFlow(r *fastglue.Request) error {
 	// Delete steps first
 	if err := tx.Where("flow_id = ?", id).Delete(&models.ChatbotFlowStep{}).Error; err != nil {
 		tx.Rollback()
+		a.Log.Error("Failed to delete flow steps", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete flow steps", nil, "")
 	}
 
@@ -1018,6 +1037,7 @@ func (a *App) DeleteChatbotFlow(r *fastglue.Request) error {
 	result := tx.Where("id = ? AND organization_id = ?", id, orgID).Delete(&models.ChatbotFlow{})
 	if result.Error != nil {
 		tx.Rollback()
+		a.Log.Error("Failed to delete flow", "error", result.Error)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete flow", nil, "")
 	}
 	if result.RowsAffected == 0 {
@@ -1059,6 +1079,7 @@ func (a *App) ListAIContexts(r *fastglue.Request) error {
 	var contexts []models.AIContext
 	if err := pg.Apply(query.Order("priority DESC, created_at DESC")).
 		Find(&contexts).Error; err != nil {
+		a.Log.Error("Failed to fetch AI contexts", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to fetch AI contexts", nil, "")
 	}
 
@@ -1123,6 +1144,7 @@ func (a *App) CreateAIContext(r *fastglue.Request) error {
 	}
 
 	if err := a.DB.Create(&ctx).Error; err != nil {
+		a.Log.Error("Failed to create AI context", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create AI context", nil, "")
 	}
 
@@ -1205,6 +1227,7 @@ func (a *App) UpdateAIContext(r *fastglue.Request) error {
 	}
 
 	if err := a.DB.Save(aiCtx).Error; err != nil {
+		a.Log.Error("Failed to update AI context", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update AI context", nil, "")
 	}
 
@@ -1230,6 +1253,7 @@ func (a *App) DeleteAIContext(r *fastglue.Request) error {
 
 	result := a.DB.Where("id = ? AND organization_id = ?", id, orgID).Delete(&models.AIContext{})
 	if result.Error != nil {
+		a.Log.Error("Failed to delete AI context", "error", result.Error)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete AI context", nil, "")
 	}
 	if result.RowsAffected == 0 {
@@ -1263,6 +1287,7 @@ func (a *App) ListChatbotSessions(r *fastglue.Request) error {
 
 	var sessions []models.ChatbotSession
 	if err := query.Limit(100).Find(&sessions).Error; err != nil {
+		a.Log.Error("Failed to fetch sessions", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to fetch sessions", nil, "")
 	}
 

@@ -154,8 +154,21 @@ func (c *Client) SubmitTemplate(ctx context.Context, account *Account, template 
 					button["text"] = btnText
 					button["url"] = btnURL
 					if strings.Contains(btnURL, "{{") {
-						if example, ok := btnMap["example"].(string); ok && example != "" {
-							button["example"] = []string{example}
+						switch ex := btnMap["example"].(type) {
+						case string:
+							if ex != "" {
+								button["example"] = []string{ex}
+							}
+						case []interface{}:
+							if len(ex) > 0 {
+								if s, ok := ex[0].(string); ok && s != "" {
+									button["example"] = []string{s}
+								}
+							}
+						case []string:
+							if len(ex) > 0 && ex[0] != "" {
+								button["example"] = []string{ex[0]}
+							}
 						}
 					}
 				case "PHONE_NUMBER":
@@ -169,8 +182,21 @@ func (c *Client) SubmitTemplate(ctx context.Context, account *Account, template 
 				case "COPY_CODE":
 					button["type"] = "COPY_CODE"
 					button["text"] = btnText
-					if example, ok := btnMap["example"].(string); ok && example != "" {
-						button["example"] = example
+					switch ex := btnMap["example"].(type) {
+					case string:
+						if ex != "" {
+							button["example"] = ex
+						}
+					case []interface{}:
+						if len(ex) > 0 {
+							if s, ok := ex[0].(string); ok && s != "" {
+								button["example"] = s
+							}
+						}
+					case []string:
+						if len(ex) > 0 && ex[0] != "" {
+							button["example"] = ex[0]
+						}
 					}
 				default:
 					button["type"] = "QUICK_REPLY"

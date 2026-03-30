@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import DataTable from '@/components/shared/DataTable.vue'
-import type { Column } from '@/components/shared/DataTable.vue'
+import type { Column } from '@/components/shared/types'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -30,7 +30,7 @@ import {
   type MetaTemplateDataPoint,
   type MetaCallDataPoint
 } from '@/services/api'
-import { PageHeader } from '@/components/shared'
+import { PageHeader, ErrorState } from '@/components/shared'
 import {
   Command,
   CommandEmpty,
@@ -49,6 +49,8 @@ import {
   DollarSign,
   FileText,
   Phone,
+  PhoneIncoming,
+  PhoneOutgoing,
   RefreshCw,
   TrendingUp,
   Send,
@@ -60,14 +62,15 @@ import {
 import type { DateRange } from 'reka-ui'
 import { CalendarDate } from '@internationalized/date'
 import { Line, Bar } from '@/lib/charts'
-import { useToast } from '@/components/ui/toast'
+import { toast } from 'vue-sonner'
 
-const { toast } = useToast()
+
 const { t } = useI18n()
 
 // State
 const isLoading = ref(true)
 const isRefreshing = ref(false)
+const error = ref<string | null>(null)
 const accounts = ref<MetaAnalyticsAccount[]>([])
 const selectedAccountId = ref<string>('all')
 const accountComboboxOpen = ref(false)
@@ -227,6 +230,7 @@ const fetchAccounts = async () => {
 
 const fetchAnalytics = async () => {
   isLoading.value = true
+  error.value = null
   try {
     const { from, to } = getDateRange.value
     const params: {
@@ -247,11 +251,22 @@ const fetchAnalytics = async () => {
     }
 
     const response = await metaAnalyticsService.get(params)
-    const data = (response.data as any).data || response.data
+    const envelope = response.data as any
+    // Handle error envelope (status: "error")
+    if (envelope?.status === 'error') {
+      toast.error(envelope.message || 'Failed to load analytics')
+      analyticsData.value = []
+      return
+    }
+    const data = envelope?.data || envelope
     analyticsData.value = data.accounts || []
     isCached.value = data.cached || false
-  } catch (error) {
-    console.error('Failed to load analytics:', error)
+  } catch (err: any) {
+    console.error('Failed to load analytics:', err?.response?.data, err)
+    const errData = err?.response?.data
+    const msg = errData?.data?.message || errData?.message || err?.message || 'Failed to load analytics'
+    toast.error(msg)
+    error.value = t('metaInsights.errorLoadingInsights')
     analyticsData.value = []
   } finally {
     isLoading.value = false
@@ -262,18 +277,11 @@ const refreshCache = async () => {
   isRefreshing.value = true
   try {
     await metaAnalyticsService.refresh()
-    toast({
-      title: t('metaInsights.cacheCleared'),
-      description: t('metaInsights.cacheRefreshed')
-    })
+    toast.success(t('metaInsights.cacheRefreshed'))
     await fetchAnalytics()
   } catch (error) {
     console.error('Failed to refresh cache:', error)
-    toast({
-      title: t('common.error'),
-      description: t('metaInsights.refreshFailed'),
-      variant: 'destructive'
-    })
+    toast.error(t('metaInsights.refreshFailed'))
   } finally {
     isRefreshing.value = false
   }
@@ -558,26 +566,45 @@ const filteredTemplateData = computed(() => {
 })
 
 function aggregateCallData(points: MetaCallDataPoint[]) {
-  const byType = new Map<string, number>()
-  const byDirection = new Map<string, number>()
+  const byTime = new Map<number, { incoming: number; outgoing: number; cost: number; totalDuration: number }>()
   let totalCalls = 0
+  let totalIncoming = 0
+  let totalOutgoing = 0
+  let totalCost = 0
   let totalDuration = 0
 
   for (const point of points) {
-    totalCalls += point.total_calls
-    totalDuration += point.call_duration
+    totalCalls += point.count
+    totalCost += point.cost
+    totalDuration += point.average_duration * point.count
 
-    const callType = point.call_type || 'UNKNOWN'
-    byType.set(callType, (byType.get(callType) || 0) + point.total_calls)
+    if (point.direction === 'USER_INITIATED') {
+      totalIncoming += point.count
+    } else if (point.direction === 'BUSINESS_INITIATED') {
+      totalOutgoing += point.count
+    }
 
-    const direction = point.call_direction || 'UNKNOWN'
-    byDirection.set(direction, (byDirection.get(direction) || 0) + point.total_calls)
+    const existing = byTime.get(point.start) || { incoming: 0, outgoing: 0, cost: 0, totalDuration: 0 }
+    const isIncoming = point.direction === 'USER_INITIATED'
+    byTime.set(point.start, {
+      incoming: existing.incoming + (isIncoming ? point.count : 0),
+      outgoing: existing.outgoing + (!isIncoming ? point.count : 0),
+      cost: existing.cost + point.cost,
+      totalDuration: existing.totalDuration + point.average_duration * point.count
+    })
   }
 
+  const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0
+  const sortedTimes = Array.from(byTime.entries()).sort((a, b) => a[0] - b[0])
+
   return {
-    totals: { calls: totalCalls, duration: totalDuration },
-    byType: Object.fromEntries(byType),
-    byDirection: Object.fromEntries(byDirection)
+    totals: { calls: totalCalls, incoming: totalIncoming, outgoing: totalOutgoing, cost: totalCost, avgDuration },
+    timeSeries: sortedTimes.map(([time, data]) => ({
+      time,
+      incoming: data.incoming,
+      outgoing: data.outgoing,
+      cost: data.cost
+    }))
   }
 }
 
@@ -632,6 +659,36 @@ const pricingChartData = computed(() => {
         label: t('metaInsights.cost'),
         data: categories.map(([, val]) => val.cost),
         backgroundColor: 'rgba(16, 185, 129, 0.8)'
+      }
+    ]
+  }
+})
+
+const callChartData = computed(() => {
+  if (!aggregatedData.value || activeTab.value !== 'call_analytics') {
+    return { labels: [], datasets: [] }
+  }
+
+  const data = aggregatedData.value as ReturnType<typeof aggregateCallData>
+
+  return {
+    labels: data.timeSeries.map(ts => formatTimestamp(ts.time)),
+    datasets: [
+      {
+        label: t('metaInsights.incoming'),
+        data: data.timeSeries.map(d => d.incoming),
+        borderColor: 'rgb(59, 130, 246)',
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        fill: true,
+        tension: 0.3
+      },
+      {
+        label: t('metaInsights.outgoing'),
+        data: data.timeSeries.map(d => d.outgoing),
+        borderColor: 'rgb(168, 85, 247)',
+        backgroundColor: 'rgba(168, 85, 247, 0.1)',
+        fill: true,
+        tension: 0.3
       }
     ]
   }
@@ -775,7 +832,7 @@ const chartOptions = {
         </Popover>
 
         <!-- Refresh Button -->
-        <Button variant="outline" size="icon" @click="refreshCache" :disabled="isRefreshing">
+        <Button variant="outline" size="icon" :aria-label="$t('metaInsights.refreshCache')" @click="refreshCache" :disabled="isRefreshing">
           <RefreshCw :class="['h-4 w-4', isRefreshing && 'animate-spin']" />
         </Button>
 
@@ -789,8 +846,17 @@ const chartOptions = {
     <!-- Content -->
     <ScrollArea class="flex-1">
       <div class="p-6 space-y-6">
+        <!-- Error State -->
+        <ErrorState
+          v-if="error && !isLoading"
+          :title="$t('common.loadErrorTitle')"
+          :description="error"
+          :retry-label="$t('common.retry')"
+          @retry="fetchAnalytics"
+        />
+
         <!-- Analytics Type Tabs -->
-        <Tabs v-model="activeTab" class="w-full">
+        <Tabs v-if="!error" v-model="activeTab" class="w-full">
           <TabsList class="grid w-full grid-cols-4 lg:w-auto lg:inline-flex">
             <TabsTrigger value="analytics">
               <MessageSquare class="h-4 w-4 lg:mr-2" />
@@ -1217,7 +1283,7 @@ const chartOptions = {
             </template>
             <template v-else-if="aggregatedData && activeTab === 'call_analytics'">
               <!-- Stats Cards -->
-              <div class="grid gap-4 md:grid-cols-2">
+              <div class="grid gap-4 md:grid-cols-5">
                 <div class="card-depth rounded-xl border border-white/[0.08] bg-white/[0.04] p-6 light:bg-white light:border-gray-200">
                   <div class="flex flex-row items-center justify-between space-y-0 pb-2">
                     <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.totalCalls') }}</span>
@@ -1234,63 +1300,75 @@ const chartOptions = {
 
                 <div class="card-depth rounded-xl border border-white/[0.08] bg-white/[0.04] p-6 light:bg-white light:border-gray-200">
                   <div class="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.totalDuration') }}</span>
+                    <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.incoming') }}</span>
+                    <div class="h-10 w-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                      <PhoneIncoming class="h-5 w-5 text-blue-400" />
+                    </div>
+                  </div>
+                  <div class="pt-2">
+                    <div class="text-3xl font-bold text-white light:text-gray-900">
+                      {{ (aggregatedData as ReturnType<typeof aggregateCallData>).totals.incoming.toLocaleString() }}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-depth rounded-xl border border-white/[0.08] bg-white/[0.04] p-6 light:bg-white light:border-gray-200">
+                  <div class="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.outgoing') }}</span>
+                    <div class="h-10 w-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                      <PhoneOutgoing class="h-5 w-5 text-purple-400" />
+                    </div>
+                  </div>
+                  <div class="pt-2">
+                    <div class="text-3xl font-bold text-white light:text-gray-900">
+                      {{ (aggregatedData as ReturnType<typeof aggregateCallData>).totals.outgoing.toLocaleString() }}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-depth rounded-xl border border-white/[0.08] bg-white/[0.04] p-6 light:bg-white light:border-gray-200">
+                  <div class="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.avgDuration') }}</span>
                     <div class="h-10 w-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
                       <TrendingUp class="h-5 w-5 text-emerald-400" />
                     </div>
                   </div>
                   <div class="pt-2">
                     <div class="text-3xl font-bold text-white light:text-gray-900">
-                      {{ formatDuration((aggregatedData as ReturnType<typeof aggregateCallData>).totals.duration) }}
+                      {{ formatDuration((aggregatedData as ReturnType<typeof aggregateCallData>).totals.avgDuration) }}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card-depth rounded-xl border border-white/[0.08] bg-white/[0.04] p-6 light:bg-white light:border-gray-200">
+                  <div class="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.totalCost') }}</span>
+                    <div class="h-10 w-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                      <DollarSign class="h-5 w-5 text-amber-400" />
+                    </div>
+                  </div>
+                  <div class="pt-2">
+                    <div class="text-3xl font-bold text-white light:text-gray-900">
+                      ${{ (aggregatedData as ReturnType<typeof aggregateCallData>).totals.cost.toFixed(2) }}
                     </div>
                   </div>
                 </div>
               </div>
 
-              <!-- Call Breakdown -->
-              <div class="grid gap-4 md:grid-cols-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>{{ $t('metaInsights.callsByType') }}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div class="space-y-3">
-                      <div
-                        v-for="[type, count] in Object.entries((aggregatedData as ReturnType<typeof aggregateCallData>).byType)"
-                        :key="type"
-                        class="flex items-center justify-between"
-                      >
-                        <span class="text-white/70 light:text-gray-600">{{ formatCategory(type) }}</span>
-                        <span class="font-medium text-white light:text-gray-900">{{ count.toLocaleString() }}</span>
-                      </div>
-                      <div v-if="Object.keys((aggregatedData as ReturnType<typeof aggregateCallData>).byType).length === 0" class="text-muted-foreground text-center py-4">
-                        {{ $t('metaInsights.noCallData') }}
-                      </div>
+              <!-- Chart -->
+              <Card>
+                <CardHeader>
+                  <CardTitle>{{ $t('metaInsights.callsOverTime') }}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div class="h-80">
+                    <Line v-if="callChartData.labels.length > 0" :data="callChartData" :options="chartOptions" />
+                    <div v-else class="h-full flex items-center justify-center text-muted-foreground">
+                      {{ $t('metaInsights.noDataForPeriod') }}
                     </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>{{ $t('metaInsights.callsByDirection') }}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div class="space-y-3">
-                      <div
-                        v-for="[direction, count] in Object.entries((aggregatedData as ReturnType<typeof aggregateCallData>).byDirection)"
-                        :key="direction"
-                        class="flex items-center justify-between"
-                      >
-                        <span class="text-white/70 light:text-gray-600">{{ formatCategory(direction) }}</span>
-                        <span class="font-medium text-white light:text-gray-900">{{ count.toLocaleString() }}</span>
-                      </div>
-                      <div v-if="Object.keys((aggregatedData as ReturnType<typeof aggregateCallData>).byDirection).length === 0" class="text-muted-foreground text-center py-4">
-                        {{ $t('metaInsights.noCallData') }}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
+                  </div>
+                </CardContent>
+              </Card>
             </template>
             <template v-else>
               <div class="text-center py-12 text-muted-foreground">

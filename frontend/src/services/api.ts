@@ -19,6 +19,25 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null
 }
 
+/**
+ * Build standard headers for native fetch() calls.
+ * Includes X-Organization-ID (for org switching) and optionally X-CSRF-Token (for mutating requests).
+ */
+export function getRequestHeaders(opts?: { csrf?: boolean }): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const selectedOrgId = localStorage.getItem('selected_organization_id')
+  if (selectedOrgId) {
+    headers['X-Organization-ID'] = selectedOrgId
+  }
+  if (opts?.csrf) {
+    const csrfToken = getCookie('whm_csrf')
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken
+    }
+  }
+  return headers
+}
+
 // Request interceptor to add CSRF token and organization header
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
@@ -42,6 +61,18 @@ api.interceptors.request.use(
   }
 )
 
+// Token refresh mutex — ensures only one refresh runs at a time.
+// Without this, multiple concurrent 401s each trigger a refresh, but the
+// single-use refresh token (JTI deleted from Redis) causes all but the first
+// to fail, which clears auth and logs the user out.
+let isRefreshing = false
+let refreshSubscribers: Array<(success: boolean) => void> = []
+
+function onRefreshComplete(success: boolean) {
+  refreshSubscribers.forEach(cb => cb(success))
+  refreshSubscribers = []
+}
+
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
@@ -55,14 +86,36 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true
 
+      // If a refresh is already in flight, queue this request to wait for it
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          refreshSubscribers.push((success: boolean) => {
+            if (success) {
+              resolve(api(originalRequest))
+            } else {
+              reject(error)
+            }
+          })
+        })
+      }
+
+      isRefreshing = true
+
       try {
         // Browser sends whm_refresh cookie automatically via withCredentials
         await axios.post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true })
 
-        // Cookies are updated by the server response — retry the original request
+        // Cookies are updated by the server response — notify waiting requests
+        onRefreshComplete(true)
+        isRefreshing = false
+
+        // Retry the original request
         return api(originalRequest)
       } catch {
-        // Refresh failed, clear user and redirect to login
+        // Refresh failed — notify waiting requests and redirect to login
+        onRefreshComplete(false)
+        isRefreshing = false
+
         localStorage.removeItem('user')
         localStorage.removeItem('auth_token')
         localStorage.removeItem('refresh_token')
@@ -188,8 +241,27 @@ export const messagesService = {
     api.get(`/contacts/${contactId}/messages`, { params }),
   send: (contactId: string, data: { type: string; content: any; reply_to_message_id?: string; whatsapp_account?: string }) =>
     api.post(`/contacts/${contactId}/messages`, data),
-  sendTemplate: (contactId: string, data: { template_name: string; template_params?: Record<string, string>; account_name?: string }) =>
-    api.post('/messages/template', { contact_id: contactId, ...data }),
+  sendTemplate: (contactId: string, data: { template_name: string; template_params?: Record<string, string>; button_params?: Record<string, string>; account_name?: string }, headerFile?: File) => {
+    if (headerFile) {
+      const formData = new FormData()
+      formData.append('contact_id', contactId)
+      formData.append('template_name', data.template_name)
+      if (data.template_params) {
+        formData.append('template_params', JSON.stringify(data.template_params))
+      }
+      if (data.button_params) {
+        formData.append('button_params', JSON.stringify(data.button_params))
+      }
+      if (data.account_name) {
+        formData.append('account_name', data.account_name)
+      }
+      formData.append('header_file', headerFile)
+      return api.post('/messages/template', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+    }
+    return api.post('/messages/template', { contact_id: contactId, ...data })
+  },
   sendReaction: (contactId: string, messageId: string, emoji: string) =>
     api.post(`/contacts/${contactId}/messages/${messageId}/reaction`, { emoji })
 }
@@ -202,10 +274,8 @@ export const templatesService = {
     const formData = new FormData()
     formData.append('file', file)
     formData.append('account', accountName)
-    const csrfToken = getCookie('whm_csrf')
-    return axios.post(`${api.defaults.baseURL}/templates/upload-media`, formData, {
-      withCredentials: true,
-      headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+    return api.post('/templates/upload-media', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
     })
   }
 }
@@ -242,10 +312,8 @@ export const campaignsService = {
   uploadMedia: (campaignId: string, file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    const csrfToken = getCookie('whm_csrf')
-    return axios.post(`${api.defaults.baseURL}/campaigns/${campaignId}/media`, formData, {
-      withCredentials: true,
-      headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+    return api.post(`/campaigns/${campaignId}/media`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
     })
   },
   getMedia: (campaignId: string) =>
@@ -399,10 +467,10 @@ export interface MetaTemplateDataPoint {
 export interface MetaCallDataPoint {
   start: number
   end: number
-  total_calls: number
-  call_duration: number
-  call_type: string
-  call_direction: string
+  count: number
+  cost: number
+  average_duration: number
+  direction?: string // USER_INITIATED or BUSINESS_INITIATED
 }
 
 interface MetaAnalyticsData {
@@ -569,7 +637,19 @@ export const organizationService = {
     timezone?: string
     date_format?: string
     name?: string
-  }) => api.put('/org/settings', data)
+    calling_enabled?: boolean
+    max_call_duration?: number
+    transfer_timeout_secs?: number
+    hold_music_file?: string
+    ringback_file?: string
+  }) => api.put('/org/settings', data),
+  uploadOrgAudio: (file: File, type: 'hold_music' | 'ringback') => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post(`/org/audio?type=${type}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  }
 }
 
 // Organizations
@@ -611,6 +691,7 @@ export interface Team {
   name: string
   description: string
   assignment_strategy: 'round_robin' | 'load_balanced' | 'manual'
+  per_agent_timeout_secs: number
   is_active: boolean
   member_count: number
   created_at: string
@@ -644,11 +725,13 @@ export const teamsService = {
     name: string
     description?: string
     assignment_strategy?: 'round_robin' | 'load_balanced' | 'manual'
+    per_agent_timeout_secs?: number
   }) => api.post<{ team: Team }>('/teams', data),
   update: (id: string, data: {
     name?: string
     description?: string
     assignment_strategy?: 'round_robin' | 'load_balanced' | 'manual'
+    per_agent_timeout_secs?: number
     is_active?: boolean
   }) => api.put<{ team: Team }>(`/teams/${id}`, data),
   delete: (id: string) => api.delete(`/teams/${id}`),
@@ -813,6 +896,192 @@ export const notesService = {
     api.put<ConversationNote>(`/contacts/${contactId}/notes/${noteId}`, data),
   delete: (contactId: string, noteId: string) =>
     api.delete(`/contacts/${contactId}/notes/${noteId}`)
+}
+
+// Calling - Call Logs & IVR Flows
+export interface CallLog {
+  id: string
+  organization_id: string
+  whatsapp_account: string
+  contact_id: string
+  whatsapp_call_id: string
+  caller_phone: string
+  direction: 'incoming' | 'outgoing'
+  status: 'ringing' | 'answered' | 'completed' | 'missed' | 'rejected' | 'failed' | 'initiating' | 'accepted' | 'transferring'
+  duration: number
+  ivr_flow_id?: string
+  ivr_path?: Record<string, any>
+  agent_id?: string
+  started_at?: string
+  answered_at?: string
+  ended_at?: string
+  disconnected_by?: 'client' | 'agent' | 'system'
+  error_message?: string
+  recording_s3_key?: string
+  recording_duration?: number
+  contact?: {
+    id: string
+    phone_number: string
+    profile_name: string
+  }
+  agent?: {
+    id: string
+    full_name: string
+    email: string
+  }
+  ivr_flow?: IVRFlow
+  created_at: string
+  updated_at: string
+}
+
+// v2 Node-based IVR Flow types
+export type IVRNodeType = 'greeting' | 'menu' | 'gather' | 'http_callback' | 'transfer' | 'goto_flow' | 'timing' | 'hangup'
+
+export interface IVRNodePosition {
+  x: number
+  y: number
+}
+
+export interface IVRNode {
+  id: string
+  type: IVRNodeType
+  label: string
+  position: IVRNodePosition
+  config: Record<string, any>
+}
+
+export interface IVREdge {
+  from: string
+  to: string
+  condition: string
+}
+
+export interface IVRFlowData {
+  version: 2
+  nodes: IVRNode[]
+  edges: IVREdge[]
+  entry_node: string
+}
+
+export interface IVRFlow {
+  id: string
+  organization_id: string
+  whatsapp_account: string
+  name: string
+  description: string
+  is_active: boolean
+  is_call_start: boolean
+  is_outgoing_end: boolean
+  menu: IVRFlowData
+  welcome_audio_url: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CallTransfer {
+  id: string
+  organization_id: string
+  call_log_id: string
+  whatsapp_call_id: string
+  caller_phone: string
+  contact_id: string
+  whatsapp_account: string
+  status: 'waiting' | 'connected' | 'completed' | 'abandoned' | 'no_answer'
+  team_id?: string
+  agent_id?: string
+  initiating_agent_id?: string
+  transferred_at: string
+  connected_at?: string
+  completed_at?: string
+  hold_duration: number
+  talk_duration: number
+  ivr_path?: Record<string, any>
+  contact?: {
+    id: string
+    phone_number: string
+    profile_name: string
+  }
+  agent?: {
+    id: string
+    full_name: string
+    email: string
+  }
+  initiating_agent?: {
+    id: string
+    full_name: string
+    email: string
+  }
+  team?: {
+    id: string
+    name: string
+  }
+  call_log?: CallLog
+  created_at: string
+  updated_at: string
+}
+
+// Outgoing Calls
+export interface CallPermission {
+  id: string
+  contact_id: string
+  whatsapp_account: string
+  status: 'pending' | 'accepted' | 'declined' | 'expired'
+  message_id?: string
+  requested_at: string
+  responded_at?: string
+  expires_at?: string
+}
+
+export const outgoingCallsService = {
+  initiate: (data: { contact_id: string; whatsapp_account: string; sdp_offer: string }) =>
+    api.post<{ call_log_id: string; sdp_answer: string }>('/calls/outgoing', data),
+  hangup: (callLogId: string) =>
+    api.post(`/calls/outgoing/${callLogId}/hangup`),
+  requestPermission: (data: { contact_id: string; whatsapp_account: string }) =>
+    api.post<{ permission_id: string }>('/calls/permission-request', data),
+  getPermission: (contactId: string, whatsappAccount: string) =>
+    api.get<CallPermission>(`/calls/permission/${contactId}`, { params: { whatsapp_account: whatsappAccount } }),
+  getICEServers: () =>
+    api.get<{ ice_servers: Array<{ urls: string[]; username?: string; credential?: string }> }>('/calls/ice-servers'),
+}
+
+export const callLogsService = {
+  list: (params?: { status?: string; account?: string; contact_id?: string; direction?: string; ivr_flow_id?: string; phone?: string; from?: string; to?: string; page?: number; limit?: number }) =>
+    api.get<{ call_logs: CallLog[]; total: number }>('/call-logs', { params }),
+  get: (id: string) => api.get<CallLog>(`/call-logs/${id}`),
+  getRecordingURL: (id: string) =>
+    api.get<{ url: string; duration: number }>(`/call-logs/${id}/recording`)
+}
+
+export const callTransfersService = {
+  list: (params?: { status?: string; page?: number; limit?: number }) =>
+    api.get<{ call_transfers: CallTransfer[]; total: number }>('/call-transfers', { params }),
+  get: (id: string) => api.get<CallTransfer>(`/call-transfers/${id}`),
+  connect: (id: string, sdpOffer: string) =>
+    api.post<{ sdp_answer: string }>(`/call-transfers/${id}/connect`, { sdp_offer: sdpOffer }),
+  hangup: (id: string) =>
+    api.post(`/call-transfers/${id}/hangup`),
+  initiate: (data: { call_log_id: string; team_id: string; agent_id?: string }) =>
+    api.post<{ status: string }>('/call-transfers/initiate', data),
+}
+
+export const ivrFlowsService = {
+  list: (params?: { search?: string; page?: number; limit?: number }) =>
+    api.get<{ ivr_flows: IVRFlow[]; total: number }>('/ivr-flows', { params }),
+  get: (id: string) => api.get<IVRFlow>(`/ivr-flows/${id}`),
+  create: (data: { whatsapp_account: string; name: string; description?: string; is_call_start?: boolean; menu: IVRFlowData; welcome_audio_url?: string }) =>
+    api.post<IVRFlow>('/ivr-flows', data),
+  update: (id: string, data: { name?: string; description?: string; is_active?: boolean; is_call_start?: boolean; is_outgoing_end?: boolean; menu?: IVRFlowData; welcome_audio_url?: string }) =>
+    api.put<IVRFlow>(`/ivr-flows/${id}`, data),
+  delete: (id: string) => api.delete(`/ivr-flows/${id}`),
+  uploadAudio: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/ivr-flows/audio', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+  getAudioUrl: (filename: string) => `${api.defaults.baseURL}/ivr-flows/audio/${encodeURIComponent(filename)}`
 }
 
 export default api
