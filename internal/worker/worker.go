@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,7 +52,6 @@ func New(cfg *config.Config, db *gorm.DB, rdb *redis.Client, log logf.Logger) (*
 	}, nil
 }
 
-
 // Run starts the worker and processes jobs until context is cancelled
 func (w *Worker) Run(ctx context.Context) error {
 	w.Log.Info("Worker starting")
@@ -99,15 +99,24 @@ func (w *Worker) HandleRecipientJob(ctx context.Context, job *queue.RecipientJob
 		return nil // Don't retry
 	}
 
+	// Check marketing opt-out
+	if contact.MarketingOptOut && campaign.Template != nil && strings.EqualFold(campaign.Template.Category, "MARKETING") {
+		w.Log.Info("Skipping marketing message for opted-out contact", "contact_id", contact.ID, "phone", job.PhoneNumber)
+		w.updateRecipientStatus(job.RecipientID, models.MessageStatusFailed, "", "Contact opted out of marketing messages")
+		w.incrementCampaignCount(job.CampaignID, "failed_count")
+		return nil
+	}
+
 	// Build recipient for sending
 	recipient := &models.BulkMessageRecipient{
 		PhoneNumber:    job.PhoneNumber,
 		RecipientName:  job.RecipientName,
 		TemplateParams: job.TemplateParams,
+		HeaderParams:   job.HeaderParams,
 	}
 
 	// Send template message
-	waMessageID, err := w.sendTemplateMessage(ctx, &account, campaign.Template, recipient, campaign.HeaderMediaID)
+	waMessageID, err := w.sendTemplateMessage(ctx, &account, campaign.Template, recipient, campaign.HeaderMediaID, campaign.HeaderMediaFilename)
 
 	// Create Message record
 	message := models.Message{
@@ -160,7 +169,7 @@ func (w *Worker) HandleRecipientJob(ctx context.Context, job *queue.RecipientJob
 
 // updateRecipientStatus updates the recipient's status in the database
 func (w *Worker) updateRecipientStatus(recipientID uuid.UUID, status models.MessageStatus, waMessageID, errorMsg string) {
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"status":               status,
 		"whats_app_message_id": waMessageID,
 	}
@@ -219,7 +228,7 @@ func (w *Worker) checkCampaignCompletion(ctx context.Context, campaignID, organi
 		}
 
 		now := time.Now()
-		w.DB.Model(&campaign).Updates(map[string]interface{}{
+		w.DB.Model(&campaign).Updates(map[string]any{
 			"status":       models.CampaignStatusCompleted,
 			"completed_at": now,
 		})
@@ -243,7 +252,7 @@ func (w *Worker) checkCampaignCompletion(ctx context.Context, campaignID, organi
 }
 
 // sendTemplateMessage sends a template message via WhatsApp Cloud API
-func (w *Worker) sendTemplateMessage(ctx context.Context, account *models.WhatsAppAccount, template *models.Template, recipient *models.BulkMessageRecipient, campaignHeaderMediaID string) (string, error) {
+func (w *Worker) sendTemplateMessage(ctx context.Context, account *models.WhatsAppAccount, template *models.Template, recipient *models.BulkMessageRecipient, campaignHeaderMediaID, campaignHeaderMediaFilename string) (string, error) {
 	waAccount := account.ToWAAccount()
 
 	// Resolve body parameters into a map for BuildTemplateComponents
@@ -258,10 +267,38 @@ func (w *Worker) sendTemplateMessage(ctx context.Context, account *models.WhatsA
 		}
 	}
 
-	// Use the shared component builder (same as chat template sending)
-	components := whatsapp.BuildTemplateComponents(bodyParams, template.HeaderType, campaignHeaderMediaID)
+	// Resolve the header text parameter (if any) into its own map. Prefer
+	// recipient.HeaderParams (new path, populated by AddRecipients) and fall
+	// back to a TemplateParams lookup for legacy recipient rows persisted
+	// before HeaderParams existed.
+	var headerParams map[string]string
+	if template.HeaderType == "TEXT" {
+		if hNames := templateutil.ExtParamNames(template.HeaderContent); len(hNames) == 1 {
+			name := hNames[0]
+			if raw, ok := recipient.HeaderParams[name]; ok {
+				headerParams = map[string]string{name: fmt.Sprintf("%v", raw)}
+			} else if raw, ok := recipient.TemplateParams[name]; ok {
+				headerParams = map[string]string{name: fmt.Sprintf("%v", raw)}
+			}
+		}
+	}
 
-	return w.WhatsApp.SendTemplateMessage(ctx, waAccount, recipient.PhoneNumber, template.Name, template.Language, components)
+	// Use the shared component builder (same as chat template sending).
+	components, err := whatsapp.BuildTemplateComponents(
+		bodyParams,
+		template.HeaderType, template.HeaderContent,
+		headerParams,
+		campaignHeaderMediaID, campaignHeaderMediaFilename,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to build template components: %w", err)
+	}
+	// Add auto-generated button components (Flow needs flow_token)
+	flowComponents := whatsapp.AutoButtonComponents(template.Buttons)
+	components = append(components, flowComponents...)
+
+	rcpt := whatsapp.Recipient{Phone: recipient.PhoneNumber}
+	return w.WhatsApp.SendTemplateMessage(ctx, waAccount, rcpt, template.Name, template.Language, components)
 }
 
 // decryptAccountSecrets decrypts the encrypted secrets on a WhatsApp account.
@@ -280,4 +317,3 @@ func (w *Worker) Close() error {
 	}
 	return nil
 }
-

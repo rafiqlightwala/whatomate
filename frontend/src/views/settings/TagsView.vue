@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -17,7 +17,7 @@ import { Plus, Tags, Pencil, Trash2 } from 'lucide-vue-next'
 import { getErrorMessage } from '@/lib/api-utils'
 import { TAG_COLORS } from '@/lib/constants'
 import { formatDate } from '@/lib/utils'
-import { useDebounceFn } from '@vueuse/core'
+import { useSearchPagination } from '@/composables/useSearchPagination'
 
 const { t } = useI18n()
 const tagsStore = useTagsStore()
@@ -37,12 +37,9 @@ const {
   isSubmitting, isDialogOpen, editingItem: editingTag, deleteDialogOpen, itemToDelete: tagToDelete,
   formData, openCreateDialog, openEditDialog: baseOpenEditDialog, openDeleteDialog, closeDialog, closeDeleteDialog,
 } = useCrudState<Tag, TagFormData>(defaultFormData)
-const searchQuery = ref('')
-
-// Pagination state
-const currentPage = ref(1)
-const totalItems = ref(0)
-const pageSize = 20
+const { searchQuery, currentPage, totalItems, pageSize, handlePageChange } = useSearchPagination({
+  fetchFn: () => fetchTags(),
+})
 
 // Sorting state
 const sortKey = ref('name')
@@ -76,22 +73,6 @@ async function fetchTags() {
   } finally {
     isLoading.value = false
   }
-}
-
-// Debounced search to avoid too many API calls
-const debouncedSearch = useDebounceFn(() => {
-  currentPage.value = 1
-  fetchTags()
-}, 300)
-
-// Watch search query changes
-watch(searchQuery, () => {
-  debouncedSearch()
-})
-
-function handlePageChange(page: number) {
-  currentPage.value = page
-  fetchTags()
 }
 
 onMounted(() => fetchTags())

@@ -27,7 +27,7 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
 </script>
 
 <template>
-  <div class="base-node relative bg-background border rounded-lg shadow-md hover:shadow-lg min-w-[180px] max-w-[240px] overflow-visible transition-shadow duration-200">
+  <div class="base-node relative bg-background border rounded-lg shadow-md hover:shadow-lg min-w-48 w-max max-w-sm overflow-visible transition-shadow duration-200">
     <!-- Input handle (top) -->
     <Handle
       v-if="hasInput !== false"
@@ -51,28 +51,29 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
 
     <!-- Output handles (bottom) -->
     <template v-if="outputHandles && outputHandles.length > 0">
-      <!-- Handle labels -->
-      <div v-if="outputHandles.length > 1" class="flex px-1 pt-1 border-t border-dashed">
-        <div
-          v-for="handle in outputHandles"
-          :key="'label-' + handle.id"
-          class="flex-1 text-center"
-        >
-          <span class="text-[9px] font-medium text-muted-foreground cursor-default" :title="handle.title">{{ handle.label }}</span>
-        </div>
-      </div>
       <Handle
         v-for="(handle, idx) in outputHandles"
         :key="handle.id"
         type="source"
         :id="handle.id"
         :position="Position.Bottom"
+        :title="handle.title || handle.label"
         :style="{
           left: outputHandles.length === 1 ? '50%' : `${((idx + 1) / (outputHandles.length + 1)) * 100}%`,
           zIndex: 10,
         }"
         class="!w-3.5 !h-3.5 !rounded-full !bg-primary !border-2 !border-background hover:!bg-primary/80 !transition-colors"
       />
+      <span
+        v-for="(handle, idx) in outputHandles"
+        :key="'num-' + handle.id"
+        class="absolute text-[9px] font-bold text-muted-foreground pointer-events-none"
+        :style="{
+          left: outputHandles.length === 1 ? '50%' : `${((idx + 1) / (outputHandles.length + 1)) * 100}%`,
+          bottom: '-18px',
+          transform: 'translateX(-50%)',
+        }"
+      >{{ idx + 1 }}</span>
     </template>
     <template v-else-if="!outputHandles">
       <Handle

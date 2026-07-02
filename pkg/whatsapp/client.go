@@ -68,7 +68,7 @@ func (c *Client) getBaseURL() string {
 }
 
 // doRequest performs an HTTP request to the Meta API
-func (c *Client) doRequest(ctx context.Context, method, url string, body interface{}, accessToken string) ([]byte, error) {
+func (c *Client) doRequest(ctx context.Context, method, url string, body any, accessToken string) ([]byte, error) {
 	var reqBody io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
@@ -104,6 +104,34 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body interfa
 	return respBody, nil
 }
 
+// doJSON performs an HTTP request to the Meta API and unmarshals the JSON
+// response body into a value of type T. It is a thin generic wrapper over
+// doRequest for the common "request then decode" pattern.
+func doJSON[T any](ctx context.Context, c *Client, method, url string, body any, accessToken string) (T, error) {
+	var result T
+	respBody, err := c.doRequest(ctx, method, url, body, accessToken)
+	if err != nil {
+		return result, err
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return result, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// parseMessageID extracts the WhatsApp message ID from a successful send
+// response body, returning an error if the body is malformed or carries no ID.
+func parseMessageID(respBody []byte) (string, error) {
+	var resp MetaAPIResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+	if len(resp.Messages) == 0 {
+		return "", fmt.Errorf("no message ID in response")
+	}
+	return resp.Messages[0].ID, nil
+}
+
 // CredentialsValidationResult contains the result of credentials validation
 type CredentialsValidationResult struct {
 	PhoneNumber            string
@@ -120,7 +148,7 @@ type CredentialsValidationResult struct {
 // that the phone number belongs to the specified business account
 func (c *Client) ValidateCredentials(ctx context.Context, phoneID, businessID, accessToken, apiVersion string) (*CredentialsValidationResult, error) {
 	// 1. Validate PhoneID
-	phoneURL := fmt.Sprintf("%s/%s/%s?fields=display_phone_number,verified_name,code_verification_status,account_mode,quality_rating",
+	phoneURL := fmt.Sprintf("%s/%s/%s?fields=display_phone_number,verified_name,code_verification_status,account_mode,quality_rating,is_on_biz_app,platform_type",
 		c.getBaseURL(), apiVersion, phoneID)
 	phoneBody, err := c.doRequest(ctx, http.MethodGet, phoneURL, nil, accessToken)
 	if err != nil {
@@ -133,15 +161,19 @@ func (c *Client) ValidateCredentials(ctx context.Context, phoneID, businessID, a
 		AccountMode            string `json:"account_mode"`
 		CodeVerificationStatus string `json:"code_verification_status"`
 		QualityRating          string `json:"quality_rating"`
+		IsOnBizApp             bool   `json:"is_on_biz_app"`
+		PlatformType           string `json:"platform_type"`
 	}
 	if err := json.Unmarshal(phoneBody, &phoneResult); err != nil {
 		return nil, fmt.Errorf("failed to parse phone response: %w", err)
 	}
 
-	// Check verification status (skip for sandbox/test numbers)
+	// Check verification status (skip for sandbox/test numbers and SMB accounts)
 	isTestNumber := phoneResult.AccountMode == "SANDBOX" || phoneResult.VerifiedName == "Test Number"
+	isSMB := phoneResult.IsOnBizApp || phoneResult.PlatformType == "SMB" || phoneResult.PlatformType == "SMB_CLOUD_API"
+
 	var warning string
-	if !isTestNumber {
+	if !isTestNumber && !isSMB {
 		if phoneResult.CodeVerificationStatus == "NOT_VERIFIED" {
 			return nil, fmt.Errorf("phone number is not verified. Please register it at: https://business.facebook.com/wa/manage/phone-numbers/")
 		}
@@ -325,68 +357,62 @@ func (c *Client) UploadMedia(ctx context.Context, account *Account, data []byte,
 }
 
 // sendMediaMessage is the shared implementation for all media message types.
-func (c *Client) sendMediaMessage(ctx context.Context, account *Account, phoneNumber, mediaType string, mediaFields map[string]interface{}) (string, error) {
-	payload := map[string]interface{}{
+func (c *Client) sendMediaMessage(ctx context.Context, account *Account, rcpt Recipient, mediaType string, mediaFields map[string]any) (string, error) {
+	payload := map[string]any{
 		"messaging_product": "whatsapp",
 		"recipient_type":    "individual",
-		"to":                phoneNumber,
 		"type":              mediaType,
 		mediaType:           mediaFields,
 	}
+	rcpt.SetOnPayload(payload)
 
 	url := c.buildMessagesURL(account)
-	c.Log.Debug("Sending media message", "type", mediaType, "phone", phoneNumber, "media_id", mediaFields["id"])
+	c.Log.Debug("Sending media message", "type", mediaType, "phone", rcpt.Phone, "media_id", mediaFields["id"])
 
 	respBody, err := c.doRequest(ctx, "POST", url, payload, account.AccessToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to send %s message: %w", mediaType, err)
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	messageID, err := parseMessageID(respBody)
+	if err != nil {
+		return "", err
 	}
-
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
-	}
-
-	messageID := resp.Messages[0].ID
-	c.Log.Info("Media message sent", "type", mediaType, "message_id", messageID, "phone", phoneNumber)
+	c.Log.Info("Media message sent", "type", mediaType, "message_id", messageID, "phone", rcpt.Phone)
 	return messageID, nil
 }
 
 // SendImageMessage sends an image message using a media ID
-func (c *Client) SendImageMessage(ctx context.Context, account *Account, phoneNumber, mediaID, caption string) (string, error) {
-	return c.sendMediaMessage(ctx, account, phoneNumber, "image", map[string]interface{}{
+func (c *Client) SendImageMessage(ctx context.Context, account *Account, rcpt Recipient, mediaID, caption string) (string, error) {
+	return c.sendMediaMessage(ctx, account, rcpt, "image", map[string]any{
 		"id": mediaID, "caption": caption,
 	})
 }
 
 // SendDocumentMessage sends a document message using a media ID
-func (c *Client) SendDocumentMessage(ctx context.Context, account *Account, phoneNumber, mediaID, filename, caption string) (string, error) {
-	return c.sendMediaMessage(ctx, account, phoneNumber, "document", map[string]interface{}{
+func (c *Client) SendDocumentMessage(ctx context.Context, account *Account, rcpt Recipient, mediaID, filename, caption string) (string, error) {
+	return c.sendMediaMessage(ctx, account, rcpt, "document", map[string]any{
 		"id": mediaID, "filename": filename, "caption": caption,
 	})
 }
 
 // SendVideoMessage sends a video message using a media ID
-func (c *Client) SendVideoMessage(ctx context.Context, account *Account, phoneNumber, mediaID, caption string) (string, error) {
-	return c.sendMediaMessage(ctx, account, phoneNumber, "video", map[string]interface{}{
+func (c *Client) SendVideoMessage(ctx context.Context, account *Account, rcpt Recipient, mediaID, caption string) (string, error) {
+	return c.sendMediaMessage(ctx, account, rcpt, "video", map[string]any{
 		"id": mediaID, "caption": caption,
 	})
 }
 
 // SendAudioMessage sends an audio message using a media ID
-func (c *Client) SendAudioMessage(ctx context.Context, account *Account, phoneNumber, mediaID string) (string, error) {
-	return c.sendMediaMessage(ctx, account, phoneNumber, "audio", map[string]interface{}{
+func (c *Client) SendAudioMessage(ctx context.Context, account *Account, rcpt Recipient, mediaID string) (string, error) {
+	return c.sendMediaMessage(ctx, account, rcpt, "audio", map[string]any{
 		"id": mediaID,
 	})
 }
 
 // MarkMessageRead sends a read receipt for a message
 func (c *Client) MarkMessageRead(ctx context.Context, account *Account, messageID string) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"messaging_product": "whatsapp",
 		"status":            "read",
 		"message_id":        messageID,
@@ -453,7 +479,7 @@ func (c *Client) ResumableUpload(ctx context.Context, account *Account, data []b
 	// Step 1: Create upload session
 	sessionURL := fmt.Sprintf("%s/%s/%s/uploads", c.getBaseURL(), account.APIVersion, account.AppID)
 
-	sessionPayload := map[string]interface{}{
+	sessionPayload := map[string]any{
 		"file_length": len(data),
 		"file_type":   mimeType,
 		"file_name":   filename,
@@ -587,4 +613,199 @@ func (c *Client) SubscribeApp(ctx context.Context, account *Account) error {
 
 	c.Log.Info("App subscribed to webhooks", "business_id", account.BusinessID)
 	return nil
+}
+
+// TokenExchangeResponse represents the response from OAuth token exchange
+type TokenExchangeResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+}
+
+// ExchangeCodeForToken exchanges a Facebook authorization code for a permanent access token
+func (c *Client) ExchangeCodeForToken(ctx context.Context, code, appID, appSecret, apiVersion string) (string, error) {
+	url := fmt.Sprintf("%s/%s/oauth/access_token?client_id=%s&client_secret=%s&code=%s",
+		c.getBaseURL(), apiVersion, appID, appSecret, code)
+
+	// OAuth endpoint doesn't require Authorization header, so we make a direct request
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create token exchange request: %w", err)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("token exchange request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		// Parse Meta error using same pattern as doRequest
+		var metaErr MetaAPIError
+		if json.Unmarshal(respBody, &metaErr) == nil && metaErr.Error.Message != "" {
+			return "", fmt.Errorf("token exchange failed: %s", metaErr.Error.Message)
+		}
+		return "", fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var tokenResp TokenExchangeResponse
+	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
+		return "", fmt.Errorf("failed to parse token response: %w", err)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return "", fmt.Errorf("no access token in response")
+	}
+
+	c.Log.Info("Token exchange successful")
+	return tokenResp.AccessToken, nil
+}
+
+// PhoneNumberInfo represents phone number information from Meta
+type PhoneNumberInfo struct {
+	VerifiedName       string `json:"verified_name"`
+	DisplayPhoneNumber string `json:"display_phone_number"`
+	QualityRating      string `json:"quality_rating"`
+	IsOnBizApp         bool   `json:"is_on_biz_app"`
+	PlatformType       string `json:"platform_type"`
+}
+
+// GetPhoneNumberInfo retrieves information about a phone number
+func (c *Client) GetPhoneNumberInfo(ctx context.Context, phoneID, accessToken, apiVersion string) (*PhoneNumberInfo, error) {
+	url := fmt.Sprintf("%s/%s/%s?fields=verified_name,display_phone_number,quality_rating,is_on_biz_app,platform_type",
+		c.getBaseURL(), apiVersion, phoneID)
+
+	respBody, err := c.doRequest(ctx, http.MethodGet, url, nil, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get phone number info: %w", err)
+	}
+
+	var info PhoneNumberInfo
+	if err := json.Unmarshal(respBody, &info); err != nil {
+		return nil, fmt.Errorf("failed to parse phone number info: %w", err)
+	}
+
+	return &info, nil
+}
+
+// RegisterPhoneNumber registers a phone number with Two-Step Verification PIN
+func (c *Client) RegisterPhoneNumber(ctx context.Context, phoneID, pin, accessToken, apiVersion string) error {
+	url := fmt.Sprintf("%s/%s/%s/register", c.getBaseURL(), apiVersion, phoneID)
+
+	payload := map[string]string{
+		"messaging_product": "whatsapp",
+		"pin":               pin,
+	}
+
+	_, err := c.doRequest(ctx, http.MethodPost, url, payload, accessToken)
+	if err != nil {
+		return fmt.Errorf("phone registration failed: %w", err)
+	}
+
+	c.Log.Info("Phone number registered successfully", "phone_id", phoneID)
+	return nil
+}
+
+// TokenDebugInfo represents the response from the debug_token endpoint
+type TokenDebugInfo struct {
+	AppID               string   `json:"app_id"`
+	Type                string   `json:"type"`
+	Application         string   `json:"application"`
+	DataAccessExpiresAt int64    `json:"data_access_expires_at"`
+	ExpiresAt           int64    `json:"expires_at"`
+	IsValid             bool     `json:"is_valid"`
+	IssuedAt            int64    `json:"issued_at"`
+	Scopes              []string `json:"scopes"`
+	UserID              string   `json:"user_id"`
+	GranularScopes      []struct {
+		Scope     string   `json:"scope"`
+		TargetIds []string `json:"target_ids,omitempty"`
+	} `json:"granular_scopes"`
+}
+
+// GetTokenDebugInfo retrieves information about an access token
+func (c *Client) GetTokenDebugInfo(ctx context.Context, inputToken, accessToken string) (*TokenDebugInfo, error) {
+	url := fmt.Sprintf("%s/debug_token?input_token=%s", c.getBaseURL(), inputToken)
+
+	// debug_token requires an app access token or a user access token
+	respBody, err := c.doRequest(ctx, http.MethodGet, url, nil, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token debug info: %w", err)
+	}
+
+	var resp struct {
+		Data TokenDebugInfo `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse token debug info: %w", err)
+	}
+
+	return &resp.Data, nil
+}
+
+// SharedWABAResponse represents the response structure for shared WABA request
+type SharedWABAResponse struct {
+	Data []struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Phone struct {
+			Data []struct {
+				ID                 string `json:"id"`
+				DisplayPhoneNumber string `json:"display_phone_number"`
+				VerifiedName       string `json:"verified_name"`
+			} `json:"data"`
+		} `json:"phone_numbers"`
+	} `json:"data"`
+}
+
+// GetSharedWABA discovers the WABA and Phone Number shared with the app
+// This is useful when the embedded signup only returns a code and we need to find the connected account
+func (c *Client) GetSharedWABA(ctx context.Context, accessToken string) (*SharedWABAResponse, error) {
+	// Query /me/accounts to find the WABA and its phone numbers
+	// granular_scopes might be needed to filter this if the user has many accounts,
+	// but for embedded signup, usually only the shared account is accessible or relevant.
+	url := fmt.Sprintf("%s/me/accounts?fields=id,name,phone_numbers{id,display_phone_number,verified_name}", c.getBaseURL())
+
+	respBody, err := c.doRequest(ctx, http.MethodGet, url, nil, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shared WABA info: %w", err)
+	}
+
+	var resp SharedWABAResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse shared WABA response: %w", err)
+	}
+
+	return &resp, nil
+}
+
+// WABAPhoneNumbersResponse represents the response containing phone numbers for a WABA
+type WABAPhoneNumbersResponse struct {
+	Data []struct {
+		ID                 string `json:"id"`
+		DisplayPhoneNumber string `json:"display_phone_number"`
+		VerifiedName       string `json:"verified_name"`
+		QualityRating      string `json:"quality_rating"`
+	} `json:"data"`
+}
+
+// GetWABAPhoneNumbers retrieves all phone numbers associated with a WABA
+func (c *Client) GetWABAPhoneNumbers(ctx context.Context, wabaID, accessToken string) (*WABAPhoneNumbersResponse, error) {
+	url := fmt.Sprintf("%s/%s/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating", c.getBaseURL(), wabaID)
+
+	respBody, err := c.doRequest(ctx, http.MethodGet, url, nil, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get WABA phone numbers: %w", err)
+	}
+
+	var resp WABAPhoneNumbersResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse WABA phone numbers response: %w", err)
+	}
+
+	return &resp, nil
 }

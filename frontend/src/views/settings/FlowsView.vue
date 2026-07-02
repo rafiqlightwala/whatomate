@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -16,7 +16,7 @@ import { toast } from 'vue-sonner'
 import { Plus, Pencil, Trash2, Workflow, Play, ExternalLink, Loader2, Archive, RefreshCw, Upload, Copy } from 'lucide-vue-next'
 import { getErrorMessage } from '@/lib/api-utils'
 import { formatDate } from '@/lib/utils'
-import { useDebounceFn } from '@vueuse/core'
+import { useSearchPagination } from '@/composables/useSearchPagination'
 
 const { t } = useI18n()
 
@@ -37,7 +37,6 @@ const flows = ref<WhatsAppFlow[]>([])
 const accounts = ref<Account[]>([])
 const isLoading = ref(true)
 const fetchError = ref(false)
-const searchQuery = ref('')
 const selectedAccount = ref<string>(localStorage.getItem('flows_selected_account') || 'all')
 
 const showCreateDialog = ref(false)
@@ -61,10 +60,9 @@ const editFormData = ref({ name: '', category: '', json_version: '6.0' })
 const flowBuilderData = ref<{ screens: any[] }>({ screens: [] })
 const editFlowBuilderData = ref<{ screens: any[] }>({ screens: [] })
 
-// Pagination state
-const currentPage = ref(1)
-const totalItems = ref(0)
-const pageSize = 20
+const { searchQuery, currentPage, totalItems, pageSize, handlePageChange } = useSearchPagination({
+  fetchFn: () => fetchFlows(),
+})
 
 const columns = computed<Column<WhatsAppFlow>[]>(() => [
   { key: 'name', label: t('flows.name'), sortable: true },
@@ -111,19 +109,6 @@ async function fetchFlows() {
     totalItems.value = data.total ?? flows.value.length
   } catch { flows.value = []; fetchError.value = true }
   finally { isLoading.value = false }
-}
-
-// Debounced search
-const debouncedSearch = useDebounceFn(() => {
-  currentPage.value = 1
-  fetchFlows()
-}, 300)
-
-watch(searchQuery, () => debouncedSearch())
-
-function handlePageChange(page: number) {
-  currentPage.value = page
-  fetchFlows()
 }
 
 function openCreateDialog() {

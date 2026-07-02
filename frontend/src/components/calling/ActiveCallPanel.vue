@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCallingStore } from '@/stores/calling'
 import { Button } from '@/components/ui/button'
-import { Phone, PhoneOff, PhoneIncoming, Mic, MicOff, ArrowRightLeft } from 'lucide-vue-next'
+import { Phone, PhoneOff, PhoneIncoming, Mic, MicOff, ArrowRightLeft, Pause, Play } from 'lucide-vue-next'
 import CallTransferPicker from '@/components/calling/CallTransferPicker.vue'
 import { toast } from 'vue-sonner'
 
@@ -41,6 +41,9 @@ const statusText = computed(() => {
       case 'answered': return t('outgoingCalls.answered')
       default: return ''
     }
+  }
+  if (store.isOnCall && store.isOnHold) {
+    return t('calling.onHold')
   }
   if (store.isOnCall) {
     return t('callTransfers.callConnected')
@@ -112,6 +115,20 @@ async function handleAccept(id: string) {
         >
           <MicOff v-if="store.isMuted" class="h-4 w-4 !text-red-400" />
           <Mic v-else class="h-4 w-4" />
+        </Button>
+
+        <!-- Hold/Resume (only when on active call) -->
+        <Button
+          v-if="store.isOnCall"
+          size="sm"
+          variant="ghost"
+          class="h-10 w-10 rounded-full p-0 border !text-zinc-300"
+          :class="store.isOnHold ? '!bg-amber-900/30 !border-amber-700 hover:!bg-amber-900/50' : '!bg-zinc-800 !border-zinc-600 hover:!bg-zinc-700'"
+          :title="store.isOnHold ? t('calling.resume') : t('calling.hold')"
+          @click="store.isOnHold ? store.resumeCall() : store.holdCall()"
+        >
+          <Play v-if="store.isOnHold" class="h-4 w-4 !text-amber-400" />
+          <Pause v-else class="h-4 w-4" />
         </Button>
 
         <!-- Transfer (only when on active call) -->

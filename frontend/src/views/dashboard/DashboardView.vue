@@ -5,8 +5,6 @@ import { GridLayout, GridItem } from 'grid-layout-plus'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { RangeCalendar } from '@/components/ui/range-calendar'
 import {
   Select,
   SelectContent,
@@ -47,7 +45,6 @@ import {
   TrendingDown,
   Minus,
   Clock,
-  CalendarIcon,
   LayoutDashboard,
   Plus,
   Pencil,
@@ -72,8 +69,8 @@ import {
 } from 'lucide-vue-next'
 // Centralized Chart.js setup (registered once)
 import { Line, Bar, Pie } from '@/lib/charts'
-import type { DateRange } from 'reka-ui'
-import { CalendarDate } from '@internationalized/date'
+import { DateRangePicker } from '@/components/shared'
+import { useDateRange } from '@/composables/useDateRange'
 import { useAppToast } from '@/composables/useAppToast'
 
 const { success, error: showError } = useAppToast()
@@ -274,104 +271,14 @@ const pieChartOptions = {
 }
 
 // Time range filter
-type TimeRangePreset = 'today' | '7days' | '30days' | 'this_month' | 'custom'
-
-const loadSavedPreferences = () => {
-  const savedRange = localStorage.getItem('dashboard_time_range') as TimeRangePreset | null
-  const savedCustomRange = localStorage.getItem('dashboard_custom_range')
-
-  let customRange: DateRange = { start: undefined, end: undefined }
-  if (savedCustomRange) {
-    try {
-      const parsed = JSON.parse(savedCustomRange)
-      if (parsed.start && parsed.end) {
-        customRange = {
-          start: new CalendarDate(parsed.start.year, parsed.start.month, parsed.start.day),
-          end: new CalendarDate(parsed.end.year, parsed.end.month, parsed.end.day)
-        }
-      }
-    } catch (e) {
-      console.error('Failed to parse saved custom range:', e)
-    }
-  }
-
-  return {
-    range: savedRange || 'this_month',
-    customRange
-  }
-}
-
-const savedPrefs = loadSavedPreferences()
-const selectedRange = ref<TimeRangePreset>(savedPrefs.range as TimeRangePreset)
-const customDateRange = ref<any>(savedPrefs.customRange)
-const isDatePickerOpen = ref(false)
-
-const savePreferences = () => {
-  localStorage.setItem('dashboard_time_range', selectedRange.value)
-  if (selectedRange.value === 'custom' && customDateRange.value.start && customDateRange.value.end) {
-    localStorage.setItem('dashboard_custom_range', JSON.stringify({
-      start: {
-        year: customDateRange.value.start.year,
-        month: customDateRange.value.start.month,
-        day: customDateRange.value.start.day
-      },
-      end: {
-        year: customDateRange.value.end.year,
-        month: customDateRange.value.end.month,
-        day: customDateRange.value.end.day
-      }
-    }))
-  }
-}
-
-const formatDateLocal = (date: Date): string => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-const getDateRange = computed(() => {
-  const now = new Date()
-  let from: Date
-  let to: Date = now
-
-  switch (selectedRange.value) {
-    case 'today':
-      from = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      to = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      break
-    case '7days':
-      from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
-      to = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      break
-    case '30days':
-      from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30)
-      to = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      break
-    case 'this_month':
-      from = new Date(now.getFullYear(), now.getMonth(), 1)
-      to = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      break
-    case 'custom':
-      if (customDateRange.value.start && customDateRange.value.end) {
-        from = new Date(customDateRange.value.start.year, customDateRange.value.start.month - 1, customDateRange.value.start.day)
-        to = new Date(customDateRange.value.end.year, customDateRange.value.end.month - 1, customDateRange.value.end.day)
-      } else {
-        from = new Date(now.getFullYear(), now.getMonth(), 1)
-        to = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      }
-      break
-    default:
-      from = new Date(now.getFullYear(), now.getMonth(), 1)
-      to = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  }
-
-  return {
-    from: formatDateLocal(from),
-    to: formatDateLocal(to)
-  }
-})
+const {
+  selectedRange,
+  customDateRange,
+  isDatePickerOpen,
+  dateRange,
+  formatDateRangeDisplay,
+  applyCustomRange: applyCustomRangeBase,
+} = useDateRange({ storageKey: 'dashboard' })
 
 const comparisonPeriodLabel = computed(() => {
   switch (selectedRange.value) {
@@ -390,16 +297,6 @@ const comparisonPeriodLabel = computed(() => {
   }
 })
 
-const formatDateRange = computed(() => {
-  if (selectedRange.value === 'custom' && customDateRange.value.start && customDateRange.value.end) {
-    const start = customDateRange.value.start
-    const end = customDateRange.value.end
-    const startStr = `${start.month}/${start.day}/${start.year}`
-    const endStr = `${end.month}/${end.day}/${end.year}`
-    return `${startStr} - ${endStr}`
-  }
-  return ''
-})
 
 const formatNumber = (num: number): string => {
   if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M'
@@ -595,7 +492,7 @@ const fetchWidgetData = async () => {
 
   isWidgetDataLoading.value = true
   try {
-    const { from, to } = getDateRange.value
+    const { from, to } = dateRange.value
     const response = await widgetsService.getAllData({ from, to })
     widgetData.value = (response.data as any).data?.data || {}
   } catch (error) {
@@ -633,11 +530,8 @@ const fetchDashboardData = async () => {
 }
 
 const applyCustomRange = () => {
-  if (customDateRange.value.start && customDateRange.value.end) {
-    isDatePickerOpen.value = false
-    savePreferences()
-    fetchWidgetData()
-  }
+  applyCustomRangeBase()
+  fetchWidgetData()
 }
 
 // Widget CRUD
@@ -780,7 +674,6 @@ const confirmDeleteWidget = async () => {
 
 // Watch for range changes
 watch(selectedRange, (newValue) => {
-  savePreferences()
   if (newValue !== 'custom') {
     fetchWidgetData()
   }
@@ -843,35 +736,13 @@ onMounted(() => {
             {{ isDragMode ? $t('common.done') : $t('dashboard.editLayout') }}
           </Button>
 
-          <Select v-model="selectedRange">
-            <SelectTrigger class="w-[180px] bg-white/[0.04] border-white/[0.1] text-white/70 hover:bg-white/[0.08] light:bg-white light:border-gray-200 light:text-gray-700">
-              <SelectValue :placeholder="$t('dashboard.selectRange')" />
-            </SelectTrigger>
-            <SelectContent class="bg-[#141414] border-white/[0.08] light:bg-white light:border-gray-200">
-              <SelectItem value="today" class="text-white/70 focus:bg-white/[0.08] focus:text-white light:text-gray-700 light:focus:bg-gray-100">{{ $t('dashboard.today') }}</SelectItem>
-              <SelectItem value="7days" class="text-white/70 focus:bg-white/[0.08] focus:text-white light:text-gray-700 light:focus:bg-gray-100">{{ $t('dashboard.last7Days') }}</SelectItem>
-              <SelectItem value="30days" class="text-white/70 focus:bg-white/[0.08] focus:text-white light:text-gray-700 light:focus:bg-gray-100">{{ $t('dashboard.last30Days') }}</SelectItem>
-              <SelectItem value="this_month" class="text-white/70 focus:bg-white/[0.08] focus:text-white light:text-gray-700 light:focus:bg-gray-100">{{ $t('dashboard.thisMonth') }}</SelectItem>
-              <SelectItem value="custom" class="text-white/70 focus:bg-white/[0.08] focus:text-white light:text-gray-700 light:focus:bg-gray-100">{{ $t('dashboard.customRange') }}</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Popover v-if="selectedRange === 'custom'" v-model:open="isDatePickerOpen">
-            <PopoverTrigger as-child>
-              <Button variant="outline" class="w-auto bg-white/[0.04] border-white/[0.1] text-white/70 hover:bg-white/[0.08] hover:text-white light:bg-white light:border-gray-200 light:text-gray-700 light:hover:bg-gray-50">
-                <CalendarIcon class="h-4 w-4 mr-2" />
-                {{ formatDateRange || $t('dashboard.selectDates') }}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent class="w-auto p-4 bg-[#141414] border-white/[0.08] light:bg-white light:border-gray-200" align="end">
-              <div class="space-y-4">
-                <RangeCalendar v-model="customDateRange" :number-of-months="2" />
-                <Button class="w-full" @click="applyCustomRange" :disabled="!customDateRange.start || !customDateRange.end">
-                  {{ $t('dashboard.applyRange') }}
-                </Button>
-              </div>
-            </PopoverContent>
-          </Popover>
+          <DateRangePicker
+            v-model:selected-range="selectedRange"
+            v-model:custom-date-range="customDateRange"
+            v-model:is-date-picker-open="isDatePickerOpen"
+            :format-date-range-display="formatDateRangeDisplay"
+            @apply-custom="applyCustomRange"
+          />
         </div>
       </div>
     </header>

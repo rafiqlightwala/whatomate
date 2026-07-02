@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/shridarpatil/whatomate/internal/models"
+	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
 )
@@ -10,11 +13,8 @@ import (
 // InitiateOutgoingCall handles POST /api/calls/outgoing
 // Lets an agent start a voice call to a WhatsApp consumer.
 func (a *App) InitiateOutgoingCall(r *fastglue.Request) error {
-	orgID, userID, err := a.getOrgAndUserID(r)
+	orgID, userID, err := a.requireAuth(r, models.ResourceOutgoingCalls, models.ActionWrite)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
-	}
-	if err := a.requirePermission(r, userID, models.ResourceOutgoingCalls, models.ActionWrite); err != nil {
 		return nil
 	}
 
@@ -74,11 +74,8 @@ func (a *App) InitiateOutgoingCall(r *fastglue.Request) error {
 
 // HangupOutgoingCall handles POST /api/calls/outgoing/{id}/hangup
 func (a *App) HangupOutgoingCall(r *fastglue.Request) error {
-	_, userID, err := a.getOrgAndUserID(r)
+	_, userID, err := a.requireAuth(r, models.ResourceOutgoingCalls, models.ActionWrite)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
-	}
-	if err := a.requirePermission(r, userID, models.ResourceOutgoingCalls, models.ActionWrite); err != nil {
 		return nil
 	}
 
@@ -105,11 +102,8 @@ func (a *App) HangupOutgoingCall(r *fastglue.Request) error {
 
 // SendCallPermissionRequest handles POST /api/calls/permission-request
 func (a *App) SendCallPermissionRequest(r *fastglue.Request) error {
-	orgID, userID, err := a.getOrgAndUserID(r)
+	orgID, userID, err := a.requireAuth(r, models.ResourceOutgoingCalls, models.ActionWrite)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
-	}
-	if err := a.requirePermission(r, userID, models.ResourceOutgoingCalls, models.ActionWrite); err != nil {
 		return nil
 	}
 
@@ -151,7 +145,8 @@ func (a *App) SendCallPermissionRequest(r *fastglue.Request) error {
 
 	// Send permission request via WhatsApp Messages API
 	ctx := r.RequestCtx
-	messageID, err := a.WhatsApp.SendCallPermissionRequest(ctx, waAccount, contact.PhoneNumber, "")
+	rcpt := whatsapp.Recipient{Phone: contact.PhoneNumber, BSUID: contact.BSUID}
+	messageID, err := a.WhatsApp.SendCallPermissionRequest(ctx, waAccount, rcpt, "")
 	if err != nil {
 		a.Log.Error("Failed to send call permission request", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to send permission request", nil, "")
@@ -191,12 +186,14 @@ func (a *App) GetICEServers(r *fastglue.Request) error {
 		Credential string   `json:"credential,omitempty"`
 	}
 
+	now := time.Now()
 	servers := make([]iceServer, 0, len(a.Config.Calling.ICEServers))
 	for _, s := range a.Config.Calling.ICEServers {
+		username, credential := s.ResolveCredentials(now)
 		servers = append(servers, iceServer{
 			URLs:       s.URLs,
-			Username:   s.Username,
-			Credential: s.Credential,
+			Username:   username,
+			Credential: credential,
 		})
 	}
 
@@ -208,11 +205,8 @@ func (a *App) GetICEServers(r *fastglue.Request) error {
 // GetCallPermission handles GET /api/calls/permission/{contactId}?whatsapp_account=X
 // Checks call permission state directly via WhatsApp API.
 func (a *App) GetCallPermission(r *fastglue.Request) error {
-	orgID, userID, err := a.getOrgAndUserID(r)
+	orgID, _, err := a.requireAuth(r, models.ResourceOutgoingCalls, models.ActionRead)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
-	}
-	if err := a.requirePermission(r, userID, models.ResourceOutgoingCalls, models.ActionRead); err != nil {
 		return nil
 	}
 
@@ -254,4 +248,3 @@ func (a *App) GetCallPermission(r *fastglue.Request) error {
 		"status": status,
 	})
 }
-

@@ -12,6 +12,9 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { ArrowLeft, Save, Volume2, Grid3X3, Hash, Globe, Users, ExternalLink, Clock, PhoneOff } from 'lucide-vue-next'
+import AuditLogPanel from '@/components/shared/AuditLogPanel.vue'
+import MetadataPanel from '@/components/shared/MetadataPanel.vue'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from 'vue-sonner'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import ErrorState from '@/components/shared/ErrorState.vue'
@@ -37,6 +40,11 @@ const isActive = ref(true)
 const isCallStart = ref(false)
 const isOutgoingEnd = ref(false)
 const saving = ref(false)
+const auditRefreshKey = ref(0)
+const flowCreatedAt = ref('')
+const flowUpdatedAt = ref('')
+const flowCreatedByName = ref('')
+const flowUpdatedByName = ref('')
 const loading = ref(true)
 const loadError = ref(false)
 
@@ -332,6 +340,7 @@ async function saveFlow() {
     }
 
     toast.success(t('calling.flowUpdated'))
+    auditRefreshKey.value++
   } catch (e: any) {
     const msg = e?.response?.data?.message || t('calling.flowSaveFailed')
     toast.error(msg)
@@ -365,6 +374,10 @@ async function loadFlow() {
     isActive.value = flow.is_active
     isCallStart.value = flow.is_call_start
     isOutgoingEnd.value = flow.is_outgoing_end
+    flowCreatedAt.value = flow.created_at || ''
+    flowUpdatedAt.value = flow.updated_at || ''
+    flowCreatedByName.value = flow.created_by?.full_name || ''
+    flowUpdatedByName.value = flow.updated_by?.full_name || ''
 
     if (flow.menu && flow.menu.version === 2) {
       loadFlowData(flow.menu)
@@ -459,17 +472,30 @@ onMounted(() => {
         />
       </div>
 
-      <!-- Properties Panel -->
-      <div
-        v-if="selectedIVRNode"
-        class="w-[320px] border-l bg-background overflow-y-auto shrink-0"
-      >
-        <IVRNodeProperties
-          :node="selectedIVRNode"
-          :current-flow-id="flowId"
-          @update:node="onUpdateNode"
-          @delete="requestDeleteSelectedNode"
-        />
+      <!-- Right Panel -->
+      <div class="w-[420px] min-w-0 border-l bg-background shrink-0 flex flex-col overflow-hidden">
+        <!-- Node Properties (when a node is selected) -->
+        <div v-if="selectedIVRNode" class="flex-1 overflow-y-auto">
+          <IVRNodeProperties
+            :node="selectedIVRNode"
+            :current-flow-id="flowId"
+            @update:node="onUpdateNode"
+            @delete="requestDeleteSelectedNode"
+          />
+        </div>
+
+        <!-- Metadata + Activity Log (when no node is selected) -->
+        <ScrollArea v-else class="flex-1 [&>div>div]:!overflow-x-hidden">
+          <div class="p-4 space-y-4 overflow-hidden">
+            <MetadataPanel
+              :created-at="flowCreatedAt"
+              :updated-at="flowUpdatedAt"
+              :created-by-name="flowCreatedByName"
+              :updated-by-name="flowUpdatedByName"
+            />
+            <AuditLogPanel :key="auditRefreshKey" resource-type="ivr_flow" :resource-id="flowId" />
+          </div>
+        </ScrollArea>
       </div>
     </div>
 

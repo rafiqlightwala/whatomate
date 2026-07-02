@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shridarpatil/whatomate/internal/models"
+	"github.com/shridarpatil/whatomate/internal/templateutil"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
@@ -14,37 +15,46 @@ import (
 
 // TemplateRequest represents the request body for creating/updating a template
 type TemplateRequest struct {
-	WhatsAppAccount string        `json:"whatsapp_account" validate:"required"` // WhatsApp account name
-	Name            string        `json:"name" validate:"required"`
-	DisplayName     string        `json:"display_name"`
-	Language        string        `json:"language" validate:"required"`
-	Category        string        `json:"category" validate:"required"` // MARKETING, UTILITY, AUTHENTICATION
-	HeaderType      string        `json:"header_type"`                  // TEXT, IMAGE, DOCUMENT, VIDEO, NONE
-	HeaderContent   string        `json:"header_content"`
-	BodyContent     string        `json:"body_content" validate:"required"`
-	FooterContent   string        `json:"footer_content"`
-	Buttons         []interface{} `json:"buttons"`
-	SampleValues    []interface{} `json:"sample_values"`
+	WhatsAppAccount string `json:"whatsapp_account" validate:"required"` // WhatsApp account name
+	Name            string `json:"name" validate:"required"`
+	DisplayName     string `json:"display_name"`
+	Language        string `json:"language" validate:"required"`
+	Category        string `json:"category" validate:"required"` // MARKETING, UTILITY, AUTHENTICATION
+	HeaderType      string `json:"header_type"`                  // TEXT, IMAGE, DOCUMENT, VIDEO, NONE
+	HeaderContent   string `json:"header_content"`
+	BodyContent     string `json:"body_content"`
+	FooterContent   string `json:"footer_content"`
+	Buttons         []any  `json:"buttons"`
+	SampleValues    []any  `json:"sample_values"`
+
+	// Authentication template fields
+	AddSecurityRecommendation bool `json:"add_security_recommendation"` // Add "For your security, do not share this code."
+	CodeExpirationMinutes     int  `json:"code_expiration_minutes"`     // 1-90, 0 means no expiration footer
 }
 
 // TemplateResponse represents the response for a template
 type TemplateResponse struct {
-	ID              uuid.UUID     `json:"id"`
-	WhatsAppAccount string        `json:"whatsapp_account"` // WhatsApp account name
-	MetaTemplateID  string        `json:"meta_template_id"`
-	Name            string        `json:"name"`
-	DisplayName     string        `json:"display_name"`
-	Language        string        `json:"language"`
-	Category        string        `json:"category"`
-	Status          string        `json:"status"`
-	HeaderType      string        `json:"header_type"`
-	HeaderContent   string        `json:"header_content"`
-	BodyContent     string        `json:"body_content"`
-	FooterContent   string        `json:"footer_content"`
-	Buttons         []interface{} `json:"buttons"`
-	SampleValues    []interface{} `json:"sample_values"`
-	CreatedAt       string        `json:"created_at"`
-	UpdatedAt       string        `json:"updated_at"`
+	ID                        uuid.UUID `json:"id"`
+	WhatsAppAccount           string    `json:"whatsapp_account"` // WhatsApp account name
+	MetaTemplateID            string    `json:"meta_template_id"`
+	Name                      string    `json:"name"`
+	DisplayName               string    `json:"display_name"`
+	Language                  string    `json:"language"`
+	Category                  string    `json:"category"`
+	Status                    string    `json:"status"`
+	HeaderType                string    `json:"header_type"`
+	HeaderContent             string    `json:"header_content"`
+	BodyContent               string    `json:"body_content"`
+	FooterContent             string    `json:"footer_content"`
+	Buttons                   []any     `json:"buttons"`
+	SampleValues              []any     `json:"sample_values"`
+	AddSecurityRecommendation bool      `json:"add_security_recommendation"`
+	CodeExpirationMinutes     int       `json:"code_expiration_minutes"`
+	QualityRating             string    `json:"quality_rating"`
+	CreatedByName             string    `json:"created_by_name,omitempty"`
+	UpdatedByName             string    `json:"updated_by_name,omitempty"`
+	CreatedAt                 string    `json:"created_at"`
+	UpdatedAt                 string    `json:"updated_at"`
 }
 
 // ListTemplates returns all templates for the organization
@@ -92,17 +102,12 @@ func (a *App) ListTemplates(r *fastglue.Request) error {
 		response[i] = templateToResponse(t)
 	}
 
-	return r.SendEnvelope(map[string]any{
-		"templates": response,
-		"total":     total,
-		"page":      pg.Page,
-		"limit":     pg.Limit,
-	})
+	return r.SendEnvelope(listEnvelope("templates", response, total, pg))
 }
 
 // CreateTemplate creates a new message template
 func (a *App) CreateTemplate(r *fastglue.Request) error {
-	orgID, err := a.getOrgID(r)
+	orgID, userID, err := a.getOrgAndUserID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
@@ -113,8 +118,30 @@ func (a *App) CreateTemplate(r *fastglue.Request) error {
 	}
 
 	// Validate required fields
-	if req.WhatsAppAccount == "" || req.Name == "" || req.Language == "" || req.Category == "" || req.BodyContent == "" {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "whatsapp_account, name, language, category, and body_content are required", nil, "")
+	isAuthTemplate := strings.ToUpper(req.Category) == "AUTHENTICATION"
+	if req.WhatsAppAccount == "" || req.Name == "" || req.Language == "" || req.Category == "" {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "whatsapp_account, name, language, and category are required", nil, "")
+	}
+	if !isAuthTemplate && req.BodyContent == "" {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "body_content is required", nil, "")
+	}
+	if isAuthTemplate && req.CodeExpirationMinutes != 0 && (req.CodeExpirationMinutes < 1 || req.CodeExpirationMinutes > 90) {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "code_expiration_minutes must be between 1 and 90", nil, "")
+	}
+
+	// Validate no mixed positional and named parameters (non-auth only)
+	if !isAuthTemplate {
+		if err := templateutil.ValidateNoMixedParams(req.BodyContent); err != nil {
+			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
+		}
+		if req.HeaderType == "TEXT" {
+			if err := templateutil.ValidateNoMixedParams(req.HeaderContent); err != nil {
+				return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
+			}
+			if err := templateutil.ValidateHeaderParamCount(req.HeaderContent); err != nil {
+				return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
+			}
+		}
 	}
 
 	// Verify account belongs to organization
@@ -137,25 +164,33 @@ func (a *App) CreateTemplate(r *fastglue.Request) error {
 	}
 
 	template := models.Template{
-		OrganizationID:  orgID,
-		WhatsAppAccount: req.WhatsAppAccount,
-		Name:            templateName,
-		DisplayName:     displayName,
-		Language:        req.Language,
-		Category:        strings.ToUpper(req.Category),
-		Status:          "DRAFT", // Local draft until submitted to Meta
-		HeaderType:      strings.ToUpper(req.HeaderType),
-		HeaderContent:   req.HeaderContent,
-		BodyContent:     req.BodyContent,
-		FooterContent:   req.FooterContent,
-		Buttons:         convertToJSONBArray(req.Buttons),
-		SampleValues:    convertToJSONBArray(req.SampleValues),
+		OrganizationID:            orgID,
+		WhatsAppAccount:           req.WhatsAppAccount,
+		Name:                      templateName,
+		DisplayName:               displayName,
+		Language:                  req.Language,
+		Category:                  strings.ToUpper(req.Category),
+		Status:                    "DRAFT", // Local draft until submitted to Meta
+		HeaderType:                strings.ToUpper(req.HeaderType),
+		HeaderContent:             req.HeaderContent,
+		BodyContent:               req.BodyContent,
+		FooterContent:             req.FooterContent,
+		Buttons:                   convertToJSONBArray(req.Buttons),
+		SampleValues:              convertToJSONBArray(req.SampleValues),
+		AddSecurityRecommendation: req.AddSecurityRecommendation,
+		CodeExpirationMinutes:     req.CodeExpirationMinutes,
+		CreatedByID:               &userID,
+		UpdatedByID:               &userID,
+		QualityRating:             "UNKNOWN",
 	}
 
 	if err := a.DB.Create(&template).Error; err != nil {
 		a.Log.Error("Failed to create template", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create template", nil, "")
 	}
+
+	a.logAudit(orgID, userID,
+		"template", template.ID, models.AuditActionCreated, nil, &template)
 
 	return r.SendEnvelope(templateToResponse(template))
 }
@@ -172,17 +207,26 @@ func (a *App) GetTemplate(r *fastglue.Request) error {
 		return nil
 	}
 
-	template, err := findByIDAndOrg[models.Template](a.DB, r, id, orgID, "Template")
-	if err != nil {
-		return nil
+	var template models.Template
+	if err := a.DB.Preload("CreatedBy").Preload("UpdatedBy").
+		Where("id = ? AND organization_id = ?", id, orgID).First(&template).Error; err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Template not found", nil, "")
 	}
 
-	return r.SendEnvelope(templateToResponse(*template))
+	resp := templateToResponse(template)
+	if template.CreatedBy != nil {
+		resp.CreatedByName = template.CreatedBy.FullName
+	}
+	if template.UpdatedBy != nil {
+		resp.UpdatedByName = template.UpdatedBy.FullName
+	}
+
+	return r.SendEnvelope(resp)
 }
 
 // UpdateTemplate updates a message template
 func (a *App) UpdateTemplate(r *fastglue.Request) error {
-	orgID, err := a.getOrgID(r)
+	orgID, userID, err := a.getOrgAndUserID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
@@ -197,6 +241,9 @@ func (a *App) UpdateTemplate(r *fastglue.Request) error {
 		return nil
 	}
 
+	// Capture old state for audit diff
+	oldTemplate := *template
+
 	// When editing approved or rejected templates, set to DRAFT to indicate local changes pending submission
 	if template.Status == "APPROVED" || template.Status == "REJECTED" {
 		template.Status = "DRAFT"
@@ -205,6 +252,29 @@ func (a *App) UpdateTemplate(r *fastglue.Request) error {
 	var req TemplateRequest
 	if err := a.decodeRequest(r, &req); err != nil {
 		return nil
+	}
+
+	isAuthTemplate := strings.ToUpper(req.Category) == "AUTHENTICATION" ||
+		(req.Category == "" && strings.ToUpper(template.Category) == "AUTHENTICATION")
+
+	// Validate no mixed positional and named parameters (non-auth only)
+	if !isAuthTemplate {
+		if req.BodyContent != "" {
+			if err := templateutil.ValidateNoMixedParams(req.BodyContent); err != nil {
+				return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
+			}
+		}
+		if req.HeaderType == "TEXT" && req.HeaderContent != "" {
+			if err := templateutil.ValidateNoMixedParams(req.HeaderContent); err != nil {
+				return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
+			}
+			if err := templateutil.ValidateHeaderParamCount(req.HeaderContent); err != nil {
+				return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
+			}
+		}
+	}
+	if isAuthTemplate && req.CodeExpirationMinutes != 0 && (req.CodeExpirationMinutes < 1 || req.CodeExpirationMinutes > 90) {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "code_expiration_minutes must be between 1 and 90", nil, "")
 	}
 
 	// Update fields
@@ -231,18 +301,28 @@ func (a *App) UpdateTemplate(r *fastglue.Request) error {
 	if req.SampleValues != nil {
 		template.SampleValues = convertToJSONBArray(req.SampleValues)
 	}
+	template.AddSecurityRecommendation = req.AddSecurityRecommendation
+	template.CodeExpirationMinutes = req.CodeExpirationMinutes
+	template.UpdatedByID = &userID
 
 	if err := a.DB.Save(template).Error; err != nil {
 		a.Log.Error("Failed to update template", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update template", nil, "")
 	}
 
+	// Build per-button changes
+	var extraChanges []map[string]any
+	extraChanges = append(extraChanges, diffButtons(oldTemplate.Buttons, template.Buttons)...)
+
+	a.logAudit(orgID, userID,
+		"template", template.ID, models.AuditActionUpdated, &oldTemplate, template, extraChanges...)
+
 	return r.SendEnvelope(templateToResponse(*template))
 }
 
 // DeleteTemplate deletes a message template
 func (a *App) DeleteTemplate(r *fastglue.Request) error {
-	orgID, err := a.getOrgID(r)
+	orgID, userID, err := a.getOrgAndUserID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
@@ -270,12 +350,15 @@ func (a *App) DeleteTemplate(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete template", nil, "")
 	}
 
+	a.logAudit(orgID, userID,
+		"template", id, models.AuditActionDeleted, template, nil)
+
 	return r.SendEnvelope(map[string]string{"message": "Template deleted successfully"})
 }
 
 // SubmitTemplate submits a template to Meta for approval
 func (a *App) SubmitTemplate(r *fastglue.Request) error {
-	orgID, err := a.getOrgID(r)
+	orgID, userID, err := a.getOrgAndUserID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
@@ -289,6 +372,8 @@ func (a *App) SubmitTemplate(r *fastglue.Request) error {
 	if err != nil {
 		return nil
 	}
+
+	oldStatus := template.Status
 
 	// Only block if status is PENDING (awaiting approval - can't modify)
 	if template.MetaTemplateID != "" && template.Status == "PENDING" {
@@ -332,7 +417,12 @@ func (a *App) SubmitTemplate(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Template submitted but failed to update local record", nil, "")
 	}
 
-	return r.SendEnvelope(map[string]interface{}{
+	a.logAudit(orgID, userID,
+		"template", template.ID, models.AuditActionUpdated, nil, nil,
+		map[string]any{"field": "published", "old_value": oldStatus, "new_value": "PENDING"},
+	)
+
+	return r.SendEnvelope(map[string]any{
 		"message":          message,
 		"meta_template_id": metaTemplateID,
 		"status":           template.Status,
@@ -345,16 +435,18 @@ func (a *App) submitTemplateToMeta(account *models.WhatsAppAccount, template *mo
 	waAccount := a.toWhatsAppAccount(account)
 
 	submission := &whatsapp.TemplateSubmission{
-		MetaTemplateID: template.MetaTemplateID, // If set, will update instead of create
-		Name:           template.Name,
-		Language:       template.Language,
-		Category:       template.Category,
-		HeaderType:     template.HeaderType,
-		HeaderContent:  template.HeaderContent,
-		BodyContent:    template.BodyContent,
-		FooterContent:  template.FooterContent,
-		Buttons:        template.Buttons,
-		SampleValues:   template.SampleValues,
+		MetaTemplateID:            template.MetaTemplateID, // If set, will update instead of create
+		Name:                      template.Name,
+		Language:                  template.Language,
+		Category:                  template.Category,
+		HeaderType:                template.HeaderType,
+		HeaderContent:             template.HeaderContent,
+		BodyContent:               template.BodyContent,
+		FooterContent:             template.FooterContent,
+		Buttons:                   template.Buttons,
+		SampleValues:              template.SampleValues,
+		AddSecurityRecommendation: template.AddSecurityRecommendation,
+		CodeExpirationMinutes:     template.CodeExpirationMinutes,
 	}
 
 	ctx := context.Background()
@@ -397,6 +489,15 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 	// Sync to database
 	synced := 0
 	for _, metaTemplate := range templates {
+		// Quality rating: prefer the nested score object (newer field), fall back
+		// to the legacy top-level rating. Empty string means "Meta didn't tell us"
+		// — on INSERT the column default 'UNKNOWN' applies; on UPDATE we skip
+		// the column so we don't clobber a previously-known rating.
+		qualityRating := metaTemplate.QualityRating
+		if metaTemplate.QualityScore != nil && metaTemplate.QualityScore.Score != "" {
+			qualityRating = metaTemplate.QualityScore.Score
+		}
+
 		template := models.Template{
 			OrganizationID:  orgID,
 			WhatsAppAccount: account.Name,
@@ -406,6 +507,7 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 			Language:        metaTemplate.Language,
 			Category:        metaTemplate.Category,
 			Status:          metaTemplate.Status,
+			QualityRating:   qualityRating,
 		}
 
 		// Parse components
@@ -421,8 +523,8 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 			case "FOOTER":
 				template.FooterContent = comp.Text
 			case "BUTTONS":
-				// Convert []TemplateButton to []interface{}
-				buttons := make([]interface{}, len(comp.Buttons))
+				// Convert []TemplateButton to []any
+				buttons := make([]any, len(comp.Buttons))
 				for i, btn := range comp.Buttons {
 					buttons[i] = btn
 				}
@@ -436,7 +538,7 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 			orgID, account.Name, template.Name, template.Language).First(&existing).Error; err == nil {
 			// Update existing and restore if soft-deleted (explicitly set deleted_at to NULL)
 			template.ID = existing.ID
-			a.DB.Unscoped().Model(&template).Updates(map[string]interface{}{
+			updates := map[string]any{
 				"meta_template_id": template.MetaTemplateID,
 				"display_name":     template.DisplayName,
 				"category":         template.Category,
@@ -447,7 +549,13 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 				"footer_content":   template.FooterContent,
 				"buttons":          template.Buttons,
 				"deleted_at":       nil, // Restore soft-deleted template
-			})
+			}
+			// Only update quality_rating when Meta returned a value; otherwise
+			// keep whatever we had previously.
+			if template.QualityRating != "" {
+				updates["quality_rating"] = template.QualityRating
+			}
+			a.DB.Unscoped().Model(&template).Updates(updates)
 		} else {
 			// Create new
 			a.DB.Create(&template)
@@ -455,7 +563,7 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 		synced++
 	}
 
-	return r.SendEnvelope(map[string]interface{}{
+	return r.SendEnvelope(map[string]any{
 		"message": fmt.Sprintf("Synced %d templates", synced),
 		"count":   synced,
 	})
@@ -481,22 +589,25 @@ func (a *App) deleteTemplateFromMeta(account *models.WhatsAppAccount, templateNa
 
 func templateToResponse(t models.Template) TemplateResponse {
 	return TemplateResponse{
-		ID:              t.ID,
-		WhatsAppAccount: t.WhatsAppAccount,
-		MetaTemplateID:  t.MetaTemplateID,
-		Name:            t.Name,
-		DisplayName:     t.DisplayName,
-		Language:        t.Language,
-		Category:        t.Category,
-		Status:          t.Status,
-		HeaderType:      t.HeaderType,
-		HeaderContent:   t.HeaderContent,
-		BodyContent:     t.BodyContent,
-		FooterContent:   t.FooterContent,
-		Buttons:         convertFromJSONBArray(t.Buttons),
-		SampleValues:    convertFromJSONBArray(t.SampleValues),
-		CreatedAt:       t.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:       t.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		ID:                        t.ID,
+		WhatsAppAccount:           t.WhatsAppAccount,
+		MetaTemplateID:            t.MetaTemplateID,
+		Name:                      t.Name,
+		DisplayName:               t.DisplayName,
+		Language:                  t.Language,
+		Category:                  t.Category,
+		Status:                    t.Status,
+		QualityRating:             t.QualityRating,
+		HeaderType:                t.HeaderType,
+		HeaderContent:             t.HeaderContent,
+		BodyContent:               t.BodyContent,
+		FooterContent:             t.FooterContent,
+		Buttons:                   convertFromJSONBArray(t.Buttons),
+		SampleValues:              convertFromJSONBArray(t.SampleValues),
+		AddSecurityRecommendation: t.AddSecurityRecommendation,
+		CodeExpirationMinutes:     t.CodeExpirationMinutes,
+		CreatedAt:                 t.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:                 t.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 }
 
@@ -515,18 +626,18 @@ func normalizeTemplateName(name string) string {
 	return result.String()
 }
 
-func convertToJSONBArray(arr []interface{}) models.JSONBArray {
+func convertToJSONBArray(arr []any) models.JSONBArray {
 	if arr == nil {
 		return models.JSONBArray{}
 	}
 	return models.JSONBArray(arr)
 }
 
-func convertFromJSONBArray(arr models.JSONBArray) []interface{} {
+func convertFromJSONBArray(arr models.JSONBArray) []any {
 	if arr == nil {
-		return []interface{}{}
+		return []any{}
 	}
-	return []interface{}(arr)
+	return []any(arr)
 }
 
 // UploadTemplateMedia uploads a media file for use as template header sample
@@ -607,10 +718,90 @@ func (a *App) UploadTemplateMedia(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusBadGateway, "Failed to upload media to Meta", nil, "")
 	}
 
-	return r.SendEnvelope(map[string]interface{}{
+	return r.SendEnvelope(map[string]any{
 		"handle":    handle,
 		"filename":  fileHeader.Filename,
 		"mime_type": mimeType,
 		"size":      fileHeader.Size,
 	})
+}
+
+// diffButtons compares old and new button arrays and returns per-button field-level changes.
+func diffButtons(oldButtons, newButtons models.JSONBArray) []map[string]any {
+	var changes []map[string]any
+
+	toButtonMap := func(btn any) map[string]string {
+		m, ok := btn.(map[string]any)
+		if !ok {
+			return nil
+		}
+		result := make(map[string]string)
+		for k, v := range m {
+			result[k] = fmt.Sprintf("%v", v)
+		}
+		return result
+	}
+
+	maxLen := len(oldButtons)
+	if len(newButtons) > maxLen {
+		maxLen = len(newButtons)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		label := fmt.Sprintf("Button %d", i+1)
+		if i >= len(oldButtons) {
+			// New button added
+			newBtn := toButtonMap(newButtons[i])
+			if newBtn != nil {
+				if t := newBtn["text"]; t != "" {
+					label = fmt.Sprintf("Button %d (%s)", i+1, t)
+				}
+			}
+			changes = append(changes, map[string]any{
+				"field": label, "old_value": nil, "new_value": "added",
+			})
+			continue
+		}
+		if i >= len(newButtons) {
+			// Button removed
+			oldBtn := toButtonMap(oldButtons[i])
+			if oldBtn != nil {
+				if t := oldBtn["text"]; t != "" {
+					label = fmt.Sprintf("Button %d (%s)", i+1, t)
+				}
+			}
+			changes = append(changes, map[string]any{
+				"field": label, "old_value": "removed", "new_value": nil,
+			})
+			continue
+		}
+
+		oldBtn := toButtonMap(oldButtons[i])
+		newBtn := toButtonMap(newButtons[i])
+		if oldBtn == nil || newBtn == nil {
+			continue
+		}
+
+		// Determine button label from new text (or old if new is empty)
+		if t := newBtn["text"]; t != "" {
+			label = fmt.Sprintf("Button %d (%s)", i+1, t)
+		} else if t := oldBtn["text"]; t != "" {
+			label = fmt.Sprintf("Button %d (%s)", i+1, t)
+		}
+
+		// Compare individual fields
+		fields := []string{"type", "text", "url", "phone_number", "example"}
+		for _, f := range fields {
+			oldVal, newVal := oldBtn[f], newBtn[f]
+			if oldVal != newVal {
+				changes = append(changes, map[string]any{
+					"field":     label + " → " + f,
+					"old_value": oldVal,
+					"new_value": newVal,
+				})
+			}
+		}
+	}
+
+	return changes
 }

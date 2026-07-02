@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,13 +9,26 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { PageHeader } from '@/components/shared'
+import { PageHeader, AuditLogPanel } from '@/components/shared'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { toast } from 'vue-sonner'
 import { Settings, Bell, Loader2, Globe, Phone, Upload, Play, Pause, Music } from 'lucide-vue-next'
 import { usersService, organizationService } from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
+const authStore = useAuthStore()
+
+// The active org may be overridden by the X-Organization-ID header
+// (localStorage.selected_organization_id) when a super admin switches orgs.
+// That override is what the backend uses for scoping, so we must read it here
+// too — otherwise the activity log panel would query the user's default org
+// instead of the currently-active one.
+const orgID = computed(
+  () => localStorage.getItem('selected_organization_id') || authStore.organizationId,
+)
+const userID = computed(() => authStore.user?.id || '')
+const canWriteAccounts = computed(() => authStore.hasPermission('accounts', 'write'))
 
 const isSubmitting = ref(false)
 const isLoading = ref(true)
@@ -25,7 +38,11 @@ const generalSettings = ref({
   organization_name: 'My Organization',
   default_timezone: 'UTC',
   date_format: 'YYYY-MM-DD',
-  mask_phone_numbers: false
+  mask_phone_numbers: false,
+  meta_app_id: '',
+  meta_config_id: '',
+  meta_app_secret: '',
+  has_meta_app_secret: false
 })
 
 // Notification Settings
@@ -53,6 +70,17 @@ const ringbackAudio = ref<HTMLAudioElement | null>(null)
 const playingHoldMusic = ref(false)
 const playingRingback = ref(false)
 
+// Bump these keys to force the AuditLogPanel to remount and refetch after a save.
+// The backend writes audit entries asynchronously in a goroutine, so we delay
+// the remount slightly to give the write time to hit the DB before refetching.
+const generalLogKey = ref(0)
+const notificationLogKey = ref(0)
+const callingLogKey = ref(0)
+
+function refreshActivityLog(key: typeof generalLogKey) {
+  setTimeout(() => { key.value++ }, 500)
+}
+
 onMounted(async () => {
   try {
     const [orgResponse, userResponse] = await Promise.all([
@@ -67,7 +95,11 @@ onMounted(async () => {
         organization_name: orgData.name || 'My Organization',
         default_timezone: orgData.settings?.timezone || 'UTC',
         date_format: orgData.settings?.date_format || 'YYYY-MM-DD',
-        mask_phone_numbers: orgData.settings?.mask_phone_numbers || false
+        mask_phone_numbers: orgData.settings?.mask_phone_numbers || false,
+        meta_app_id: orgData.settings?.meta_app_id || '',
+        meta_config_id: orgData.settings?.meta_config_id || '',
+        meta_app_secret: '',
+        has_meta_app_secret: orgData.settings?.has_meta_app_secret || false
       }
       callingSettings.value = {
         calling_enabled: orgData.settings?.calling_enabled || false,
@@ -97,13 +129,30 @@ onMounted(async () => {
 async function saveGeneralSettings() {
   isSubmitting.value = true
   try {
-    await organizationService.updateSettings({
+    const payload: any = {
       name: generalSettings.value.organization_name,
       timezone: generalSettings.value.default_timezone,
       date_format: generalSettings.value.date_format,
       mask_phone_numbers: generalSettings.value.mask_phone_numbers
-    })
+    }
+    if (canWriteAccounts.value) {
+      payload.meta_app_id = generalSettings.value.meta_app_id
+      payload.meta_config_id = generalSettings.value.meta_config_id
+      if (generalSettings.value.meta_app_secret) {
+        payload.meta_app_secret = generalSettings.value.meta_app_secret
+      }
+    }
+    await organizationService.updateSettings(payload)
     toast.success(t('settings.generalSaved'))
+    // Clear secret input after save
+    generalSettings.value.meta_app_secret = ''
+    // Refresh organization settings to update has_meta_app_secret status
+    const orgResponse = await organizationService.getSettings()
+    const orgData = orgResponse.data.data || orgResponse.data
+    if (orgData) {
+      generalSettings.value.has_meta_app_secret = orgData.settings?.has_meta_app_secret || false
+    }
+    refreshActivityLog(generalLogKey)
   } catch (error) {
     toast.error(t('common.failedSave', { resource: t('resources.settings') }))
   } finally {
@@ -120,6 +169,7 @@ async function saveNotificationSettings() {
       campaign_updates: notificationSettings.value.campaign_updates
     })
     toast.success(t('settings.notificationsSaved'))
+    refreshActivityLog(notificationLogKey)
   } catch (error) {
     toast.error(t('common.failedSave', { resource: t('resources.notificationSettings') }))
   } finally {
@@ -136,6 +186,7 @@ async function saveCallingSettings() {
       transfer_timeout_secs: callingSettings.value.transfer_timeout_secs
     })
     toast.success(t('settings.callingSaved'))
+    refreshActivityLog(callingLogKey)
   } catch (error) {
     toast.error(t('common.failedSave', { resource: t('resources.settings') }))
   } finally {
@@ -284,6 +335,52 @@ function togglePlayAudio(type: 'hold_music' | 'ringback') {
                 </div>
               </div>
             </div>
+
+            <!-- Meta App Credentials Card (Gated on canWriteAccounts) -->
+            <div v-if="canWriteAccounts" class="mt-6 rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
+              <div class="p-6 pb-3">
+                <h3 class="text-lg font-semibold text-white light:text-gray-900">{{ $t('settings.metaAppCredentials') }}</h3>
+                <p class="text-sm text-white/40 light:text-gray-500">{{ $t('settings.metaAppCredentialsDesc') }}</p>
+              </div>
+              <div class="p-6 pt-3 space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                  <div class="space-y-2">
+                    <Label for="meta_app_id" class="text-white/70 light:text-gray-700">{{ $t('settings.metaAppId') }}</Label>
+                    <Input
+                      id="meta_app_id"
+                      v-model="generalSettings.meta_app_id"
+                      placeholder="e.g. 123456789012345"
+                    />
+                  </div>
+                  <div class="space-y-2">
+                    <Label for="meta_config_id" class="text-white/70 light:text-gray-700">{{ $t('settings.metaConfigId') }}</Label>
+                    <Input
+                      id="meta_config_id"
+                      v-model="generalSettings.meta_config_id"
+                      placeholder="e.g. 987654321098765"
+                    />
+                  </div>
+                </div>
+                <div class="space-y-2">
+                  <Label for="meta_app_secret" class="text-white/70 light:text-gray-700">{{ $t('settings.metaAppSecret') }}</Label>
+                  <Input
+                    id="meta_app_secret"
+                    type="password"
+                    v-model="generalSettings.meta_app_secret"
+                    :placeholder="generalSettings.has_meta_app_secret ? '••••••••••••' : 'Enter Meta App Secret'"
+                  />
+                </div>
+                <div class="flex justify-end">
+                  <Button variant="outline" size="sm" class="bg-white/[0.04] border-white/[0.1] text-white/70 hover:bg-white/[0.08] hover:text-white light:bg-white light:border-gray-200 light:text-gray-700 light:hover:bg-gray-50" @click="saveGeneralSettings" :disabled="isSubmitting">
+                    <Loader2 v-if="isSubmitting" class="mr-2 h-4 w-4 animate-spin" />
+                    {{ $t('settings.save') }}
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div v-if="orgID" class="mt-4">
+              <AuditLogPanel :key="generalLogKey" resource-type="settings.general" :resource-id="orgID" />
+            </div>
           </TabsContent>
 
           <!-- Notification Settings Tab -->
@@ -333,6 +430,9 @@ function togglePlayAudio(type: 'hold_music' | 'ringback') {
                   </Button>
                 </div>
               </div>
+            </div>
+            <div v-if="userID" class="mt-4">
+              <AuditLogPanel :key="notificationLogKey" resource-type="settings.notification" :resource-id="userID" />
             </div>
           </TabsContent>
 
@@ -455,6 +555,9 @@ function togglePlayAudio(type: 'hold_music' | 'ringback') {
                   </Button>
                 </div>
               </div>
+            </div>
+            <div v-if="orgID" class="mt-4">
+              <AuditLogPanel :key="callingLogKey" resource-type="settings.calling" :resource-id="orgID" />
             </div>
           </TabsContent>
         </Tabs>

@@ -11,11 +11,11 @@ import (
 
 // TeamRequest represents create/update team request
 type TeamRequest struct {
-	Name               string                   `json:"name" validate:"required"`
-	Description        string                   `json:"description"`
+	Name                string                    `json:"name" validate:"required"`
+	Description         string                    `json:"description"`
 	AssignmentStrategy  models.AssignmentStrategy `json:"assignment_strategy"` // round_robin, load_balanced, manual
-	PerAgentTimeoutSecs int                      `json:"per_agent_timeout_secs"`
-	IsActive            bool                     `json:"is_active"`
+	PerAgentTimeoutSecs int                       `json:"per_agent_timeout_secs"`
+	IsActive            bool                      `json:"is_active"`
 }
 
 // TeamMemberRequest represents add member request
@@ -26,16 +26,20 @@ type TeamMemberRequest struct {
 
 // TeamResponse represents team in API response
 type TeamResponse struct {
-	ID                 uuid.UUID                 `json:"id"`
-	Name               string                    `json:"name"`
-	Description        string                    `json:"description"`
+	ID                  uuid.UUID                 `json:"id"`
+	Name                string                    `json:"name"`
+	Description         string                    `json:"description"`
 	AssignmentStrategy  models.AssignmentStrategy `json:"assignment_strategy"`
 	PerAgentTimeoutSecs int                       `json:"per_agent_timeout_secs"`
 	IsActive            bool                      `json:"is_active"`
 	MemberCount         int                       `json:"member_count"`
-	Members            []TeamMemberResponse      `json:"members,omitempty"`
-	CreatedAt          time.Time                 `json:"created_at"`
-	UpdatedAt          time.Time                 `json:"updated_at"`
+	Members             []TeamMemberResponse      `json:"members,omitempty"`
+	CreatedByID         *uuid.UUID                `json:"created_by_id,omitempty"`
+	CreatedByName       string                    `json:"created_by_name,omitempty"`
+	UpdatedByID         *uuid.UUID                `json:"updated_by_id,omitempty"`
+	UpdatedByName       string                    `json:"updated_by_name,omitempty"`
+	CreatedAt           time.Time                 `json:"created_at"`
+	UpdatedAt           time.Time                 `json:"updated_at"`
 }
 
 // TeamMemberResponse represents team member in API response
@@ -96,12 +100,7 @@ func (a *App) ListTeams(r *fastglue.Request) error {
 		response[i] = buildTeamResponse(&t, false)
 	}
 
-	return r.SendEnvelope(map[string]interface{}{
-		"teams": response,
-		"total": total,
-		"page":  pg.Page,
-		"limit": pg.Limit,
-	})
+	return r.SendEnvelope(listEnvelope("teams", response, total, pg))
 }
 
 // GetTeam returns a single team with members
@@ -119,6 +118,7 @@ func (a *App) GetTeam(r *fastglue.Request) error {
 	var team models.Team
 	if err := a.DB.Where("id = ? AND organization_id = ?", teamID, orgID).
 		Preload("Members").Preload("Members.User").
+		Preload("CreatedBy").Preload("UpdatedBy").
 		First(&team).Error; err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Team not found", nil, "")
 	}
@@ -137,17 +137,13 @@ func (a *App) GetTeam(r *fastglue.Request) error {
 		}
 	}
 
-	return r.SendEnvelope(map[string]interface{}{"team": buildTeamResponse(&team, true)})
+	return r.SendEnvelope(map[string]any{"team": buildTeamResponse(&team, true)})
 }
 
 // CreateTeam creates a new team
 func (a *App) CreateTeam(r *fastglue.Request) error {
-	orgID, userID, err := a.getOrgAndUserID(r)
+	orgID, userID, err := a.requireAuth(r, models.ResourceTeams, models.ActionWrite)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
-	}
-
-	if err := a.requirePermission(r, userID, models.ResourceTeams, models.ActionWrite); err != nil {
 		return nil
 	}
 
@@ -176,6 +172,8 @@ func (a *App) CreateTeam(r *fastglue.Request) error {
 		AssignmentStrategy:  strategy,
 		PerAgentTimeoutSecs: req.PerAgentTimeoutSecs,
 		IsActive:            true,
+		CreatedByID:         &userID,
+		UpdatedByID:         &userID,
 	}
 
 	if err := a.DB.Create(&team).Error; err != nil {
@@ -183,7 +181,13 @@ func (a *App) CreateTeam(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create team", nil, "")
 	}
 
-	return r.SendEnvelope(map[string]interface{}{"team": buildTeamResponse(&team, false)})
+	// Preload relations for response
+	a.DB.Preload("CreatedBy").Preload("UpdatedBy").First(&team, "id = ?", team.ID)
+
+	a.logAudit(orgID, userID,
+		"team", team.ID, models.AuditActionCreated, nil, &team)
+
+	return r.SendEnvelope(map[string]any{"team": buildTeamResponse(&team, false)})
 }
 
 // UpdateTeam updates a team
@@ -203,6 +207,8 @@ func (a *App) UpdateTeam(r *fastglue.Request) error {
 		Preload("Members").First(&team).Error; err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Team not found", nil, "")
 	}
+
+	oldTeam := team // value copy for audit diff
 
 	// Check access: users with teams:write permission OR team managers can update
 	if !a.HasPermission(userID, models.ResourceTeams, models.ActionWrite, orgID) {
@@ -237,6 +243,7 @@ func (a *App) UpdateTeam(r *fastglue.Request) error {
 		team.AssignmentStrategy = req.AssignmentStrategy
 	}
 	team.PerAgentTimeoutSecs = req.PerAgentTimeoutSecs
+	team.UpdatedByID = &userID
 
 	if err := a.DB.Save(&team).Error; err != nil {
 		a.Log.Error("Failed to update team", "error", err)
@@ -247,17 +254,19 @@ func (a *App) UpdateTeam(r *fastglue.Request) error {
 		a.Assigner.InvalidateTeamCache(teamID)
 	}
 
-	return r.SendEnvelope(map[string]interface{}{"team": buildTeamResponse(&team, false)})
+	// Preload relations for response
+	a.DB.Preload("CreatedBy").Preload("UpdatedBy").Preload("Members").Preload("Members.User").First(&team, "id = ?", team.ID)
+
+	a.logAudit(orgID, userID,
+		"team", team.ID, models.AuditActionUpdated, &oldTeam, &team)
+
+	return r.SendEnvelope(map[string]any{"team": buildTeamResponse(&team, false)})
 }
 
 // DeleteTeam deletes a team
 func (a *App) DeleteTeam(r *fastglue.Request) error {
-	orgID, userID, err := a.getOrgAndUserID(r)
+	orgID, userID, err := a.requireAuth(r, models.ResourceTeams, models.ActionDelete)
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
-	}
-
-	if err := a.requirePermission(r, userID, models.ResourceTeams, models.ActionDelete); err != nil {
 		return nil
 	}
 
@@ -265,6 +274,10 @@ func (a *App) DeleteTeam(r *fastglue.Request) error {
 	if err != nil {
 		return nil
 	}
+
+	// Load team for audit log before deleting
+	var teamForAudit models.Team
+	a.DB.Where("id = ? AND organization_id = ?", teamID, orgID).First(&teamForAudit)
 
 	// Delete team members first
 	if err := a.DB.Where("team_id = ?", teamID).Delete(&models.TeamMember{}).Error; err != nil {
@@ -286,6 +299,9 @@ func (a *App) DeleteTeam(r *fastglue.Request) error {
 	if a.Assigner != nil {
 		a.Assigner.InvalidateTeamCache(teamID)
 	}
+
+	a.logAudit(orgID, userID,
+		"team", teamID, models.AuditActionDeleted, &teamForAudit, nil)
 
 	return r.SendEnvelope(map[string]string{"message": "Team deleted"})
 }
@@ -337,7 +353,7 @@ func (a *App) ListTeamMembers(r *fastglue.Request) error {
 		}
 	}
 
-	return r.SendEnvelope(map[string]interface{}{"members": members})
+	return r.SendEnvelope(map[string]any{"members": members})
 }
 
 // AddTeamMember adds a member to a team
@@ -426,7 +442,7 @@ func (a *App) AddTeamMember(r *fastglue.Request) error {
 		a.Assigner.InvalidateTeamCache(teamID)
 	}
 
-	return r.SendEnvelope(map[string]interface{}{"member": TeamMemberResponse{
+	return r.SendEnvelope(map[string]any{"member": TeamMemberResponse{
 		ID:          member.ID,
 		UserID:      member.UserID,
 		FullName:    user.FullName,
@@ -509,9 +525,17 @@ func buildTeamResponse(team *models.Team, includeMembers bool) TeamResponse {
 		AssignmentStrategy:  team.AssignmentStrategy,
 		PerAgentTimeoutSecs: team.PerAgentTimeoutSecs,
 		IsActive:            team.IsActive,
-		MemberCount:        len(team.Members),
-		CreatedAt:          team.CreatedAt,
-		UpdatedAt:          team.UpdatedAt,
+		MemberCount:         len(team.Members),
+		CreatedByID:         team.CreatedByID,
+		UpdatedByID:         team.UpdatedByID,
+		CreatedAt:           team.CreatedAt,
+		UpdatedAt:           team.UpdatedAt,
+	}
+	if team.CreatedBy != nil {
+		resp.CreatedByName = team.CreatedBy.FullName
+	}
+	if team.UpdatedBy != nil {
+		resp.UpdatedByName = team.UpdatedBy.FullName
 	}
 
 	if includeMembers && len(team.Members) > 0 {

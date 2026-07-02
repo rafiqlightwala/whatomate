@@ -38,7 +38,7 @@ func (m *Manager) runIVRFlow(session *CallSession, waAccount *whatsapp.Account) 
 		return
 	}
 
-	graph.buildMaps()
+	graph.BuildMaps()
 
 	// Initialize IVR context — load existing path for goto_flow continuity
 	ivrCtx := &IVRContext{
@@ -55,9 +55,9 @@ func (m *Manager) runIVRFlow(session *CallSession, waAccount *whatsapp.Account) 
 	var existingLog models.CallLog
 	if err := m.db.Select("ivr_path").Where("id = ?", session.CallLogID).First(&existingLog).Error; err == nil {
 		if existingLog.IVRPath != nil {
-			if steps, ok := existingLog.IVRPath["steps"].([]interface{}); ok {
+			if steps, ok := existingLog.IVRPath["steps"].([]any); ok {
 				for _, s := range steps {
-					if stepMap, ok := s.(map[string]interface{}); ok {
+					if stepMap, ok := s.(map[string]any); ok {
 						entry := map[string]string{}
 						for k, v := range stepMap {
 							if str, ok := v.(string); ok {
@@ -138,7 +138,7 @@ func (m *Manager) executeNodeLoop(session *CallSession, waAccount *whatsapp.Acco
 			break
 		}
 
-		node := graph.getNode(ctx.CurrentNode)
+		node := graph.Node(ctx.CurrentNode)
 		if node == nil {
 			m.log.Error("IVR node not found", "call_id", session.ID, "node_id", ctx.CurrentNode)
 			break
@@ -200,8 +200,8 @@ func (m *Manager) executeNodeLoop(session *CallSession, waAccount *whatsapp.Acco
 		if node.Type == IVRNodeMenu && strings.HasPrefix(outcome, "digit:") {
 			digit := strings.TrimPrefix(outcome, "digit:")
 			step["digit"] = digit
-			if opts, ok := node.Config["options"].(map[string]interface{}); ok {
-				if optMap, ok := opts[digit].(map[string]interface{}); ok {
+			if opts, ok := node.Config["options"].(map[string]any); ok {
+				if optMap, ok := opts[digit].(map[string]any); ok {
 					if optLabel, ok := optMap["label"].(string); ok {
 						step["option_label"] = optLabel
 					}
@@ -215,7 +215,7 @@ func (m *Manager) executeNodeLoop(session *CallSession, waAccount *whatsapp.Acco
 		ctx.Path = append(ctx.Path, step)
 
 		// Resolve the next node via edges
-		nextID := graph.resolveEdge(node.ID, outcome)
+		nextID := graph.ResolveEdge(node.ID, outcome)
 		if nextID == "" {
 			m.log.Info("No matching edge, ending IVR flow", "call_id", session.ID, "node", node.ID, "outcome", outcome)
 			break
@@ -266,7 +266,7 @@ func (m *Manager) executeMenu(session *CallSession, node *IVRNode, ctx *IVRConte
 
 	// Build set of valid digits from menu options
 	validDigits := make(map[string]bool)
-	if opts, ok := node.Config["options"].(map[string]interface{}); ok {
+	if opts, ok := node.Config["options"].(map[string]any); ok {
 		for digit := range opts {
 			validDigits[digit] = true
 		}
@@ -404,7 +404,7 @@ func (m *Manager) executeHTTPCallback(session *CallSession, node *IVRNode, ctx *
 	responseStoreAs, _ := node.Config["response_store_as"].(string)
 
 	// Build headers map
-	headersRaw, _ := node.Config["headers"].(map[string]interface{})
+	headersRaw, _ := node.Config["headers"].(map[string]any)
 	headers := make(map[string]string, len(headersRaw))
 	for k, v := range headersRaw {
 		if s, ok := v.(string); ok {
@@ -449,7 +449,7 @@ func (m *Manager) executeTransfer(session *CallSession, node *IVRNode, ctx *IVRC
 	session.mu.Unlock()
 
 	// Check if this transfer node has any outgoing edges — if not, terminal.
-	edges := graph.edgeMap[node.ID]
+	edges := graph.OutgoingEdges(node.ID)
 	if len(edges) == 0 {
 		m.initiateTransfer(session, session.AccountName, teamID, ctx.Path)
 		return "" // terminal
@@ -541,9 +541,9 @@ func (m *Manager) executeTiming(session *CallSession, node *IVRNode) string {
 	now := time.Now()
 	dayName := strings.ToLower(now.Weekday().String())
 
-	scheduleRaw, _ := node.Config["schedule"].([]interface{})
+	scheduleRaw, _ := node.Config["schedule"].([]any)
 	for _, item := range scheduleRaw {
-		entry, ok := item.(map[string]interface{})
+		entry, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -672,7 +672,7 @@ func (m *Manager) saveIVRPath(session *CallSession, path []map[string]string) {
 }
 
 // getConfigInt extracts an int from a config map with a default fallback.
-func getConfigInt(config map[string]interface{}, key string, defaultVal int) int {
+func getConfigInt(config map[string]any, key string, defaultVal int) int {
 	v, ok := config[key]
 	if !ok {
 		return defaultVal

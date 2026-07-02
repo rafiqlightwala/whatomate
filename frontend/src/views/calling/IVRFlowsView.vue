@@ -231,8 +231,8 @@ onMounted(async () => {
           <TableBody>
             <TableRow v-for="flow in store.ivrFlows" :key="flow.id">
               <TableCell>
-                <div>
-                  <p class="font-medium">{{ flow.name }}</p>
+                <div class="cursor-pointer" @click="openEdit(flow)">
+                  <p class="font-medium hover:opacity-80">{{ flow.name }}</p>
                   <p v-if="flow.description" class="text-sm text-muted-foreground">{{ flow.description }}</p>
                 </div>
               </TableCell>
