@@ -42,7 +42,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            shridh0r/whatomate:develop
+            ${{ secrets.DOCKERHUB_USERNAME }}/whatomate:develop
             ghcr.io/${{ github.repository_owner }}/whatomate:develop
           cache-from: type=gha
           cache-to: type=gha,mode=max
