@@ -198,11 +198,21 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 	// Clear chatbot tracking since client has replied
 	a.ClearContactChatbotTracking(contact.ID)
 
-	// Check for active agent transfer - skip chatbot processing if transferred
+	// Skip chatbot processing when a human is handling the chat - either an
+	// active agent transfer, or the contact is explicitly assigned to an agent.
+	// Assignment alone (no transfer record) must also pause the bot; otherwise
+	// the bot keeps auto-replying over an agent who has taken the conversation.
 	if a.hasActiveAgentTransfer(account.OrganizationID, contact.ID) {
 		a.Log.Info("Contact has active agent transfer, skipping chatbot processing",
 			"contact_id", contact.ID,
 			"phone_number", contact.PhoneNumber)
+		return
+	}
+	if contact.AssignedUserID != nil {
+		a.Log.Info("Contact is assigned to an agent, skipping chatbot processing",
+			"contact_id", contact.ID,
+			"phone_number", contact.PhoneNumber,
+			"assigned_user_id", contact.AssignedUserID)
 		return
 	}
 

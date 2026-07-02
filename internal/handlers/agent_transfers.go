@@ -1081,6 +1081,9 @@ func (a *App) willChatbotHandle(account *models.WhatsAppAccount, contact *models
 	if a.hasActiveAgentTransfer(account.OrganizationID, contact.ID) {
 		return false
 	}
+	if contact.AssignedUserID != nil {
+		return false
+	}
 	settings, err := a.getChatbotSettingsCached(account.OrganizationID, account.Name)
 	if err != nil || !settings.IsEnabled {
 		return false
