@@ -146,3 +146,15 @@ Implemented: PostgreSQL queue and leases, two-stage AI preparation, revision che
 Verification includes race-enabled concurrency and failure tests against isolated PostgreSQL/Redis, the frontend test suite, type checking and production build. Production activation and configured-model checks are performed after the release image is deployed. The first normal batch is the next 09:00 PKT after activation; expiry protection can send earlier when necessary.
 
 Operational limits: AI currently uses the existing OpenAI configuration. Media is represented as metadata, so the assistant must ask for details by email rather than pretend to inspect it. Oversized transcripts fail visibly without truncation. Uncertain WhatsApp sends retain their capacity and customer suppression to prevent duplicate replies.
+
+## Deployment verification — 30 September 2026
+
+- Application code `77b5276` was pushed to main and release. GitHub Actions run [36686055308](https://github.com/rafiqlightwala/whatomate/actions/runs/36686055308) completed successfully. The live health endpoint reports support version `2026-09-30.5`.
+- Consolidated support is enabled. Meta's account timezone was verified as Asia/Karachi. The first normal batch is 1 October 2026 at 09:00 PKT. September's existing 4,242 sends remain counted; the new billing month starts at midnight PKT.
+- Queue inspection is available at [Chatbot overview](https://wa.recubetech.com/chatbot). It shows states, due dates, prepared answers, monthly customer counts and prompt checks. The email landing page is live at [/support/email](https://wa.recubetech.com/support/email).
+- A genuine new incoming conversation appeared in the database queue and was skipped as a non-substantive introduction. The enabled policy persisted through the subsequent application deployment.
+- Full backend tests passed. Focused race tests covered quota contention, customer contention, rejected/uncertain sends, stale revisions, out-of-order capture, urgent expiry during activation, provider diagnostics and structured-output requests. Frontend tests, type checking and production build passed.
+- Initial live-model tests found weaknesses in resolved-request handling, question grouping and language classification. Prompts were strengthened and classification now uses strict structured outputs. Subsequent tests became blocked by repeated OpenAI HTTP 429 responses, including on the original model. The responses did not expose a recognized provider error code, so billing exhaustion versus rate limiting is unconfirmed.
+- The original configured model, gpt-4.1-nano, was restored. Collection and bounded send safeguards remain active. Provider preparation failures retry after 2, 10 and then 30 minutes while the reply window remains open. No synthetic test sent a customer a WhatsApp message.
+
+**Outstanding verification:** restore working OpenAI access and rerun the live prompt checks, then review prepared answers before the first batch. Deployment and queue capture are verified; AI reply readiness is not yet confirmed. The OpenAI account's quota/billing or access needs checking outside Whatomate.
