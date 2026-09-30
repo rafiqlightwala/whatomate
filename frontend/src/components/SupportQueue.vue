@@ -28,9 +28,9 @@ async function checkPrompts() {
  for (const name of ['greeting','boilerplate','login','combined','resolved','roman_urdu']) {
  const response = await api.post('/chatbot/support/preview', { case: name }, { timeout: 75000 })
  const result = response.data.data
- checks.value.push({name, passed: result.passed, body: `${result.prepared.decision} · ${result.prepared.language} · ${result.prepared.questions?.length || 0} questions\n${result.prepared.reason}\n\n${result.prepared.body || ''}`})
+ checks.value.push({name, passed: result.passed, body: `${result.prepared.decision} · ${result.prepared.language} · ${result.prepared.questions?.length || 0} questions\n${result.prepared.reason}\n${(result.prepared.questions || []).map((q: {category: string; question: string}) => `${q.category}: ${q.question}`).join('\n')}\n\n${result.prepared.body || ''}`})
  }
- } catch (err) { toast.error(getErrorMessage(err, 'Prompt check failed')) }
+ } catch (err) { const message = getErrorMessage(err, 'Prompt check failed'); checks.value.push({name: 'Model error', passed: false, body: message}); toast.error(message) }
  finally { checking.value = false }
 }
 const selected = ref('')

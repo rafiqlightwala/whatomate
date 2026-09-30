@@ -531,7 +531,12 @@ func (a *App) supportGenerator(settings *models.ChatbotSettings) support.Generat
 		}
 		payload := map[string]any{"model": settings.AI.Model, "max_tokens": 4000, "temperature": 0.2, "messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": input}}}
 		if system == builtin.InvestifyQueuePrompt {
-			payload["response_format"] = map[string]any{"type": "json_object"}
+			payload["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "support_decision", "strict": true, "schema": json.RawMessage(`{
+"type":"object","additionalProperties":false,"required":["decision","reason","language","summary","questions"],"properties":{
+"decision":{"type":"string","enum":["answer","skip","email"]},"reason":{"type":"string"},"language":{"type":"string","enum":["en","roman_ur","ur"]},"summary":{"type":"string"},
+"questions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["category","question","message_ids","attempted_steps"],"properties":{
+"category":{"type":"string","enum":["account","web","portfolio","market_data","subscription","ads","brokerage","feedback","other"]},"question":{"type":"string"},"message_ids":{"type":"array","items":{"type":"string"}},"attempted_steps":{"type":"array","items":{"type":"string"}}
+}}}}}`)}}
 		}
 		raw, _ := json.Marshal(payload)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/chat/completions", bytes.NewReader(raw))
@@ -747,7 +752,7 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 	defer cancel()
 	prepared, err := support.Prepare(ctx, transcript, a.supportGenerator(settings))
 	if err != nil {
-		return r.SendErrorEnvelope(502, "AI regression check failed", nil, "")
+		return r.SendErrorEnvelope(502, "AI regression check failed: "+err.Error(), nil, "")
 	}
 	expectedLanguage := "en"
 	if input.Case == "roman_urdu" {

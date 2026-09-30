@@ -23,9 +23,18 @@ The live AI settings use OpenAI `gpt-4.1-nano`, a 1,000-token response limit and
 
 The earlier contact export contained 7,527 unique contacts. New contacts were 911 in June, 1,011 in July, 883 in August and 1,009 in September. Meta Insights showed 4,197 sends and 4,196 deliveries over its selected last-30-days period.
 
-These are different metrics. New contacts are not the number of distinct customers replied to in a month; returning customers can increase that figure, while empty introductions can reduce the number needing an answer. The export's last-message field was empty. We cannot yet conclude that monthly substantive customers stay below 1,000.
+The deployed database report now separates incoming customers, customers successfully replied to, and successful sends. Calendar months use PKT. September is partial through deployment on 30 September.
 
-Add a database report for complete calendar months, grouped by business number, with distinct inbound customers, distinct successfully replied-to customers, total accepted/delivered sends, automated versus manual sends, and new versus returning customers. Exclude failed sends from the success metric, show pending/uncertain sends separately, and retain them in conservative budget accounting. Use all eligible history for counts and the reviewed sample only for qualitative findings.
+| Month | Customers messaging | Customers replied to | Successful sends |
+| --- | ---: | ---: | ---: |
+| April 2026 | 1,213 | 1,202 | 3,941 |
+| May 2026 | 892 | 881 | 2,603 |
+| June 2026 | 972 | 957 | 3,222 |
+| July 2026 | 1,091 | 1,077 | 3,258 |
+| August 2026 | 957 | 946 | 2,747 |
+| September 2026 | 1,107 | 1,092 | 4,242 |
+
+Monthly substantive demand is not yet measured: old greetings and keyword replies inflated the number of customers replied to. The classifier will expose skipped introductions and genuine requests separately. Several months exceeded 1,000 unique recipients, so the hard cap is necessary even with one automated response per customer. Current-month historical sends count on activation; budget accounting does not start at zero.
 
 ## Confirmed product knowledge and remaining uncertainty
 

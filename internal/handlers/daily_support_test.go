@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shridarpatil/whatomate/internal/builtin"
 	"github.com/shridarpatil/whatomate/internal/config"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/internal/support"
@@ -195,4 +196,20 @@ func TestSupportWorkerPreparesThenSendsOnce(t *testing.T) {
 	a.processSupportJob(context.Background(), policy, job)
 	require.NoError(t, a.DB.Model(&models.SupportSend{}).Where("organization_id=?", account.OrganizationID).Count(&sends).Error)
 	require.EqualValues(t, 1, sends)
+}
+
+func TestSupportGeneratorStructuredContract(t *testing.T) {
+	a := &App{HTTPClient: &http.Client{Transport: supportTransport(func(r *http.Request) (*http.Response, error) {
+		var request map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		format := request["response_format"].(map[string]any)
+		require.Equal(t, "json_schema", format["type"])
+		schema := format["json_schema"].(map[string]any)
+		require.Equal(t, true, schema["strict"])
+		require.Equal(t, false, schema["schema"].(map[string]any)["additionalProperties"])
+		require.Len(t, request["messages"], 2)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"{}"},"finish_reason":"length"}]}`)), Header: make(http.Header)}, nil
+	})}}
+	_, err := a.supportGenerator(&models.ChatbotSettings{AI: models.AIConfig{Provider: models.AIProviderOpenAI, Model: "gpt-4.1-mini"}})(context.Background(), builtin.InvestifyQueuePrompt, `{"messages":[]}`)
+	require.ErrorContains(t, err, "incomplete")
 }
