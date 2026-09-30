@@ -254,6 +254,14 @@ func (w *Worker) checkCampaignCompletion(ctx context.Context, campaignID, organi
 
 // sendTemplateMessage sends a template message via WhatsApp Cloud API
 func (w *Worker) sendTemplateMessage(ctx context.Context, account *models.WhatsAppAccount, template *models.Template, recipient *models.BulkMessageRecipient, campaignHeaderMediaID, campaignHeaderMediaFilename string) (string, error) {
+	var policy models.SupportPolicy
+	if err := w.DB.Where("organization_id=?", account.OrganizationID).Find(&policy).Error; err != nil {
+		return "", err
+	}
+	if policy.Enabled {
+		return "", fmt.Errorf("campaigns are disabled in consolidated support mode")
+	}
+
 	waAccount := account.ToWAAccount()
 
 	// Resolve body parameters into a map for BuildTemplateComponents

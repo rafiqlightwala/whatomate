@@ -232,7 +232,7 @@ func TestApp_SendOutgoingMessage_TextMessage_APIError(t *testing.T) {
 	msg, err := app.SendOutgoingMessage(ctx, req, opts)
 
 	// Message is still returned (saved to DB) even if send fails
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.NotNil(t, msg)
 
 	// Verify message status is failed in DB
@@ -611,8 +611,8 @@ func TestApp_SendOutgoingMessage_TemplateMessage_MissingTemplate(t *testing.T) {
 
 	msg, err := app.SendOutgoingMessage(ctx, req, opts)
 
-	// Message is created but send fails
-	require.NoError(t, err)
+	// Message is created but the synchronous send reports its failure.
+	require.Error(t, err)
 	require.NotNil(t, msg)
 
 	// Verify message status is failed
@@ -761,7 +761,7 @@ func TestApp_SendOutgoingMessage_UnsupportedType(t *testing.T) {
 
 	msg, err := app.SendOutgoingMessage(ctx, req, opts)
 
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.NotNil(t, msg)
 
 	// Verify message status is failed due to unsupported type

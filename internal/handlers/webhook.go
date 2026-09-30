@@ -14,6 +14,7 @@ import (
 	"github.com/shridarpatil/whatomate/internal/contactutil"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/internal/websocket"
+	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
 )
@@ -410,8 +411,12 @@ func (a *App) updateMessageStatus(whatsappMsgID, statusValue string, errors []We
 	}
 
 	newStatus := models.MessageStatus(statusValue)
+	previousStatus := message.Status
 	currentPriority := statusPriority(message.Status)
 	newPriority := statusPriority(newStatus)
+	if newStatus == models.MessageStatusFailed && (previousStatus == models.MessageStatusDelivered || previousStatus == models.MessageStatusRead) {
+		return // A delayed contradictory failure must not undo confirmed delivery.
+	}
 
 	// Only update if new status is a progression (higher priority) or if it's failed
 	if newPriority <= currentPriority && newStatus != models.MessageStatusFailed {
@@ -453,6 +458,11 @@ func (a *App) updateMessageStatus(whatsappMsgID, statusValue string, errors []We
 	if err := a.DB.Model(&message).Updates(updates).Error; err != nil {
 		a.Log.Error("Failed to update message status", "error", err, "message_id", message.ID)
 		return
+	}
+	// A definitive delivery failure can release a reservation. A failure received
+	// after delivery/read is contradictory and must not refund capacity.
+	if newStatus == models.MessageStatusFailed && previousStatus != models.MessageStatusDelivered && previousStatus != models.MessageStatusRead {
+		a.finishSupportSend(&message, whatsappMsgID, &whatsapp.RequestError{StatusCode: 400, Message: "Meta reported delivery failure"})
 	}
 
 	a.Log.Info("Updated message status", "message_id", message.ID, "status", statusValue)

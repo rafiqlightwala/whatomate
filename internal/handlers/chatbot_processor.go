@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/shridarpatil/whatomate/internal/contactutil"
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
+	"gorm.io/gorm"
 )
 
 func redactURLForLog(raw string) string {
@@ -193,7 +195,13 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 	if msg.Context != nil && msg.Context.ID != "" {
 		replyToWAMID = msg.Context.ID
 	}
-	a.saveIncomingMessage(account, contact, msg.ID, messageType, messageText, mediaInfo, replyToWAMID)
+	saved := a.saveIncomingMessage(account, contact, msg.ID, messageType, messageText, mediaInfo, replyToWAMID, msg.Timestamp)
+	if saved == nil {
+		return
+	}
+	if a.captureSupportIncoming(account, contact, saved, msg.Timestamp) {
+		return
+	}
 
 	// Clear chatbot tracking since client has replied
 	a.ClearContactChatbotTracking(contact.ID)
@@ -2001,7 +2009,7 @@ type MediaInfo struct {
 }
 
 // saveIncomingMessage saves an incoming message to the messages table
-func (a *App) saveIncomingMessage(account *models.WhatsAppAccount, contact *models.Contact, whatsappMsgID, msgType, content string, mediaInfo *MediaInfo, replyToWAMID string) {
+func (a *App) saveIncomingMessage(account *models.WhatsAppAccount, contact *models.Contact, whatsappMsgID, msgType, content string, mediaInfo *MediaInfo, replyToWAMID string, timestamps ...string) *models.Message {
 	now := time.Now()
 
 	message := models.Message{
@@ -2014,6 +2022,13 @@ func (a *App) saveIncomingMessage(account *models.WhatsAppAccount, contact *mode
 		MessageType:       models.MessageType(msgType),
 		Content:           content,
 		Status:            models.MessageStatusReceived,
+	}
+
+	if len(timestamps) > 0 {
+		if sec, err := strconv.ParseInt(timestamps[0], 10, 64); err == nil && sec > 0 && !time.Unix(sec, 0).After(now) {
+			source := time.Unix(sec, 0)
+			message.SourceAt = &source
+		}
 	}
 
 	// Handle reply context - look up the original message by WhatsApp message ID
@@ -2034,11 +2049,30 @@ func (a *App) saveIncomingMessage(account *models.WhatsAppAccount, contact *mode
 		message.MediaFilename = mediaInfo.MediaFilename
 	}
 
-	if err := a.DB.Create(&message).Error; err != nil {
+	duplicate := false
+	if err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if whatsappMsgID != "" {
+			if err := supportLock(tx, "inbound:"+account.OrganizationID.String()+whatsappMsgID); err != nil {
+				return err
+			}
+			var count int64
+			if err := tx.Model(&models.Message{}).Where("organization_id=? AND whats_app_message_id=? AND direction=?", account.OrganizationID, whatsappMsgID, models.DirectionIncoming).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				duplicate = true
+				return nil
+			}
+		}
+		return tx.Create(&message).Error
+	}); err != nil {
 		a.Log.Error("Failed to save incoming message", "error", err)
-		return
+		return nil
 	}
 
+	if duplicate {
+		return nil
+	}
 	// If the chatbot will handle this conversation (enabled + no active
 	// agent transfer), pre-mark the message as read so the contact-list
 	// unread badge doesn't briefly flash before the bot's reply arrives.
@@ -2086,6 +2120,7 @@ func (a *App) saveIncomingMessage(account *models.WhatsAppAccount, contact *mode
 		WhatsAppAccount:  account.Name,
 		Direction:        models.DirectionIncoming,
 	})
+	return &message
 }
 
 // isWithinBusinessHours checks if current time is within configured business hours

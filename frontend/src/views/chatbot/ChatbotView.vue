@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import SupportQueue from '@/components/SupportQueue.vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -176,6 +177,7 @@ const statCards = computed(() => [
     <!-- Content -->
     <ScrollArea v-else class="flex-1">
       <div class="p-6 space-y-6">
+        <SupportQueue />
         <!-- Stats -->
         <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <!-- Skeleton Loading State -->

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/shridarpatil/whatomate/internal/assignment"
+	"github.com/shridarpatil/whatomate/internal/builtin"
 	"github.com/shridarpatil/whatomate/internal/calling"
 	"github.com/shridarpatil/whatomate/internal/config"
 	"github.com/shridarpatil/whatomate/internal/queue"
@@ -105,8 +106,9 @@ func (a *App) getOrgID(r *fastglue.Request) (uuid.UUID, error) {
 // HealthCheck returns server health status
 func (a *App) HealthCheck(r *fastglue.Request) error {
 	return r.SendEnvelope(map[string]string{
-		"status":  "ok",
-		"service": "whatomate",
+		"status":          "ok",
+		"service":         "whatomate",
+		"support_version": builtin.InvestifySupportVersion,
 	})
 }
 

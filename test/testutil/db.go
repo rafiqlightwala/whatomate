@@ -101,6 +101,7 @@ func runMigrations(db *gorm.DB) error {
 		&models.WhatsAppFlow{},
 		// Chatbot models
 		&models.ChatbotSettings{},
+		&models.SupportPolicy{}, &models.SupportJob{}, &models.SupportSend{},
 		&models.KeywordRule{},
 		&models.ChatbotFlow{},
 		&models.ChatbotFlowStep{},
@@ -135,6 +136,7 @@ func runMigrations(db *gorm.DB) error {
 // Uses TRUNCATE CASCADE to handle foreign key constraints properly.
 func cleanupTables(db *gorm.DB) {
 	tables := []string{
+		"support_sends", "support_jobs", "support_policies",
 		// Dashboard tables
 		"widgets",
 		// Catalog tables
@@ -187,6 +189,7 @@ func cleanupTables(db *gorm.DB) {
 // TruncateTables truncates all tables (PostgreSQL only, faster than DELETE).
 func TruncateTables(db *gorm.DB) {
 	tables := []string{
+		"support_sends", "support_jobs", "support_policies",
 		"widgets",
 		"catalog_products",
 		"catalogs",

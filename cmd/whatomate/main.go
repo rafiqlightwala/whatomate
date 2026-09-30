@@ -285,6 +285,7 @@ func runServer(args []string) {
 	slaProcessor := handlers.NewSLAProcessor(app, time.Minute)
 	slaCtx, slaCancel := context.WithCancel(context.Background())
 	go slaProcessor.Start(slaCtx)
+	go app.RunSupportWorker(slaCtx)
 	lo.Info("SLA processor started")
 
 	// Start embedded workers
@@ -458,6 +459,7 @@ func runWorker(args []string) {
 func setupRoutes(g *fastglue.Fastglue, app *handlers.App, lo logf.Logger, basePath string, rdb *redis.Client, cfg *config.Config) {
 	// Health check
 	g.GET("/health", app.HealthCheck)
+	g.GET("/support/email", app.SupportEmailPage)
 	g.GET("/ready", app.ReadyCheck)
 
 	g.GET("/api/embedded-signup/config", app.GetEmbeddedSignupConfig)
@@ -709,6 +711,9 @@ func setupRoutes(g *fastglue.Fastglue, app *handlers.App, lo logf.Logger, basePa
 
 	// Chatbot Settings
 	g.GET("/api/chatbot/settings", app.GetChatbotSettings)
+	g.GET("/api/chatbot/support", app.GetSupportQueue)
+	g.PUT("/api/chatbot/support", app.UpdateSupportPolicy)
+	g.POST("/api/chatbot/support/preview", app.PreviewSupport)
 	g.PUT("/api/chatbot/settings", app.UpdateChatbotSettings)
 
 	// Keyword Rules

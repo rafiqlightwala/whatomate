@@ -17,6 +17,15 @@ var listOfBrokersPSXPDFRaw []byte
 //go:embed investify_ai_context_en.md
 var investifyAIContextENRaw []byte
 
+//go:embed investify_queue_prompt.txt
+var InvestifyQueuePrompt string
+
+//go:embed investify_answer_prompt.txt
+var InvestifyAnswerPrompt string
+
+// InvestifySupportVersion identifies the knowledge and prompts used for a decision.
+const InvestifySupportVersion = "2026-09-30.1"
+
 type InvestifyReplies map[string]map[string]string
 
 type DelayRange struct {

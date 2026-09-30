@@ -79,6 +79,8 @@ type OutgoingMessageRequest struct {
 
 // MessageSendOptions configures optional behaviors for message sending
 type MessageSendOptions struct {
+	supportJobID    uuid.UUID
+	supportRevision int64
 	// BroadcastWebSocket enables WebSocket broadcast to org (default: true)
 	BroadcastWebSocket bool
 
@@ -148,12 +150,18 @@ func (a *App) SendOutgoingMessage(ctx context.Context, req OutgoingMessageReques
 	// 1. Create message record
 	msg := a.createOutgoingMessage(req, opts)
 
-	// Save to database
-	if err := a.DB.Create(msg).Error; err != nil {
-		a.Log.Error("Failed to create message", "error", err)
-		return nil, fmt.Errorf("failed to create message: %w", err)
+	// Reserve the shared budget before any network send.
+	guarded, guardErr := a.reserveSupportSend(req, opts, msg)
+	if guardErr != nil {
+		return nil, guardErr
 	}
-
+	// Save to database
+	if !guarded {
+		if err := a.DB.Create(msg).Error; err != nil {
+			a.Log.Error("Failed to create message", "error", err)
+			return nil, fmt.Errorf("failed to create message: %w", err)
+		}
+	}
 	// 2. Define the send function based on message type
 	sendFn := func(sendCtx context.Context) (string, error) {
 		waAccount := a.toWhatsAppAccount(req.Account)
@@ -243,10 +251,15 @@ func (a *App) SendOutgoingMessage(ctx context.Context, req OutgoingMessageReques
 
 			wamid, sendErr := sendFn(asyncCtx)
 			a.finalizeMessageSend(msg, req, opts, wamid, sendErr)
+			a.finishSupportSend(msg, wamid, sendErr)
 		}()
 	} else {
 		wamid, err := sendFn(ctx)
 		a.finalizeMessageSend(msg, req, opts, wamid, err)
+		a.finishSupportSend(msg, wamid, err)
+		if err != nil {
+			return msg, err
+		}
 	}
 
 	// 4. Immediate actions (before send completes for async)

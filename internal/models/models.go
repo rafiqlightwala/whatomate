@@ -379,6 +379,7 @@ func (Contact) TableName() string {
 // Message represents a WhatsApp message
 type Message struct {
 	BaseModel
+	SourceAt          *time.Time    `json:"source_at,omitempty"`
 	OrganizationID    uuid.UUID     `gorm:"type:uuid;index;not null" json:"organization_id"`
 	WhatsAppAccount   string        `gorm:"size:100;index;not null" json:"whatsapp_account"` // References WhatsAppAccount.Name
 	ContactID         uuid.UUID     `gorm:"type:uuid;index;not null" json:"contact_id"`

@@ -65,7 +65,7 @@ func TestSeedBuiltinInvestifyAIContext_OverridesExistingContext(t *testing.T) {
 	assert.Equal(t, strings.TrimSpace(builtin.LoadInvestifyAIContextSummary()), strings.TrimSpace(updated.StaticContent))
 }
 
-func TestSeedBuiltinInvestifyKeywordRules_OverridesExistingRule(t *testing.T) {
+func TestSeedBuiltinInvestifyKeywordRules_PreservesDisabledState(t *testing.T) {
 	app := newProcessorTestApp(t)
 	org, _ := createProcessorTestOrg(t, app)
 
@@ -101,7 +101,7 @@ func TestSeedBuiltinInvestifyKeywordRules_OverridesExistingRule(t *testing.T) {
 	var updated models.KeywordRule
 	require.NoError(t, app.DB.Where("id = ?", existing.ID).First(&updated).Error)
 
-	assert.True(t, updated.IsEnabled)
+	assert.False(t, updated.IsEnabled)
 	assert.Equal(t, investifyBuiltinPriorityBase, updated.Priority)
 	assert.Equal(t, models.MatchTypeRegex, updated.MatchType)
 	assert.False(t, updated.CaseSensitive)
