@@ -83,6 +83,8 @@ export interface Message {
   updated_at: string
 }
 
+const CONTACTS_REFRESH_DELAY_MS = 3000
+
 export const useContactsStore = defineStore('contacts', () => {
   const contacts = ref<Contact[]>([])
   const currentContact = ref<Contact | null>(null)
@@ -119,10 +121,14 @@ export const useContactsStore = defineStore('contacts', () => {
     isLoading.value = true
     try {
       const tagsParam = selectedTags.value.length > 0 ? selectedTags.value.join(',') : undefined
+      // Keep the active search, so a background refresh doesn't clobber
+      // the list the agent is searching.
+      const search = normalizeContactSearch(searchQuery.value) || undefined
       const response = await contactsService.list({
         page: 1,
         limit: contactsLimit.value,
         tags: tagsParam,
+        search,
         ...params
       })
       // API returns { status: "success", data: { contacts: [...], total: number } }
@@ -310,31 +316,48 @@ export const useContactsStore = defineStore('contacts', () => {
     return '[Message]'
   }
 
-  function updateContactActivityFromMessage(message: Message) {
-    const contactId = String(message.contact_id)
-    const contact = contacts.value.find(c => c.id === contactId)
-    if (!contact) return
-
+  // Reflect a new message on its sidebar row. Returns false when the contact
+  // isn't in the loaded list (a new conversation, or beyond the loaded pages).
+  function updateContactFromMessage(message: Message): boolean {
+    const contact = contacts.value.find(c => c.id === message.contact_id)
+    if (!contact) return false
     contact.last_message_at = message.created_at
     contact.last_message_preview = getMessagePreview(message)
-
-    const isCurrentContact = currentContact.value?.id === contactId
     if (message.direction === 'incoming') {
+      // Mirrors the server's unread count, which excludes already-read
+      // messages (e.g. ones the chatbot handled).
+      if (message.status !== 'read') contact.unread_count++
       contact.last_inbound_at = message.created_at
       contact.service_window_open = true
-      contact.unread_count = isCurrentContact ? 0 : (contact.unread_count || 0) + 1
     }
+    return true
+  }
 
-    if (currentContact.value && currentContact.value.id === contactId && message.direction === 'incoming') {
-      currentContact.value.last_inbound_at = message.created_at
-      currentContact.value.service_window_open = true
-      currentContact.value.unread_count = 0
-    }
+  function markContactRead(contactId: string) {
+    const contact = contacts.value.find(c => c.id === contactId)
+    if (contact) contact.unread_count = 0
+    if (currentContact.value?.id === contactId) currentContact.value.unread_count = 0
+  }
+
+  // Coalesce refetches triggered by live events, so a busy inbox doesn't turn
+  // every message into a GET /contacts from every connected agent.
+  let refreshHandle: ReturnType<typeof setTimeout> | null = null
+  function scheduleContactsRefresh() {
+    if (refreshHandle) return
+    refreshHandle = setTimeout(() => {
+      refreshHandle = null
+      fetchContacts()
+    }, CONTACTS_REFRESH_DELAY_MS)
   }
 
   function addMessage(message: Message) {
-    // Update contact metadata regardless of account filter.
-    updateContactActivityFromMessage(message)
+    // Update contact metadata regardless of account filter
+    updateContactFromMessage(message)
+    // Also update currentContact if it matches
+    if (currentContact.value && currentContact.value.id === message.contact_id && message.direction === 'incoming') {
+      currentContact.value.last_inbound_at = message.created_at
+      currentContact.value.service_window_open = true
+    }
 
     // Skip adding to messages array if account filter is active and doesn't match.
     if (accountFilter.value && message.whatsapp_account && message.whatsapp_account !== accountFilter.value) {
@@ -425,6 +448,9 @@ export const useContactsStore = defineStore('contacts', () => {
     isLoadingMoreContacts,
     fetchContacts,
     loadMoreContacts,
+    updateContactFromMessage,
+    markContactRead,
+    scheduleContactsRefresh,
     // Other
     fetchContact,
     fetchMessages,
@@ -432,7 +458,6 @@ export const useContactsStore = defineStore('contacts', () => {
     sendMessage,
     sendTemplate,
     addMessage,
-    updateContactActivityFromMessage,
     updateMessageStatus,
     setCurrentContact,
     clearMessages,

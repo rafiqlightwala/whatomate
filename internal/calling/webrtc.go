@@ -66,7 +66,18 @@ func (m *Manager) negotiateWebRTC(session *CallSession, account *models.WhatsApp
 		// Store the caller's remote track for potential audio bridge use
 		session.mu.Lock()
 		session.CallerRemoteTrack = track
+		bridge := session.Bridge
+		agentLocal := session.AgentAudioTrack
 		session.mu.Unlock()
+
+		// On incoming calls the caller's media often starts only after the agent
+		// answers, so the transfer bridge may already be running without the
+		// caller track (one-way audio). Wire the track into the live bridge now
+		// so the agent can hear the caller; the bridge becomes the sole reader.
+		if bridge != nil && agentLocal != nil {
+			bridge.AttachCaller(track, agentLocal)
+			return
+		}
 
 		// Consume audio and detect inline DTMF (telephone-event packets
 		// arrive on the same m-line as audio with a different payload type).
@@ -176,6 +187,16 @@ func (m *Manager) negotiateWebRTC(session *CallSession, account *models.WhatsApp
 	if session.IVRFlow != nil {
 		go m.runIVRFlow(session, waAccount)
 	}
+}
+
+// peerGone reports whether a peer connection state means the far end is no
+// longer on the call. Closed belongs here: a browser hanging up sends a DTLS
+// CloseNotify and Pion closes the PeerConnection itself, so a clean hangup
+// surfaces as Closed rather than Disconnected or Failed.
+func peerGone(state webrtc.PeerConnectionState) bool {
+	return state == webrtc.PeerConnectionStateFailed ||
+		state == webrtc.PeerConnectionStateDisconnected ||
+		state == webrtc.PeerConnectionStateClosed
 }
 
 // waitForICEGathering waits for ICE gathering to complete on a PeerConnection

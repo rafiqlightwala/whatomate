@@ -58,10 +58,22 @@ export const useAuthStore = defineStore('auth', () => {
   function clearAuth() {
     user.value = null
 
+    // Tear the WebSocket down on any auth clear (logout or invalid session).
+    // Logout is a client-side nav, so the singleton wsService and its backoff
+    // timer would otherwise survive and reconnect-loop against a 401 forever.
+    // Lazily imported to avoid a static auth <-> websocket import cycle
+    // (websocket.ts imports this store for message handling). The microtask
+    // deferral is harmless: user.value is already null, so the reconnect gate
+    // bails even if a backoff timer were to fire in the gap.
+    void import('@/services/websocket').then(m => m.wsService.disconnect())
+
     // Clean up localStorage (including legacy token keys)
     localStorage.removeItem('user')
     localStorage.removeItem('auth_token')
     localStorage.removeItem('refresh_token')
+    // Org override is per-session: leaving it behind makes the next user on this
+    // browser send X-Organization-ID for an org they may not belong to.
+    localStorage.removeItem('selected_organization_id')
   }
 
   /**

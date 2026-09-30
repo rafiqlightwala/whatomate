@@ -506,17 +506,6 @@ func (m *Manager) ConnectAgentToTransfer(transferID, agentID uuid.UUID, sdpOffer
 		}
 	})
 
-	// Handle agent connection state changes
-	agentPC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		m.log.Info("Agent peer connection state changed",
-			"transfer_id", transferID,
-			"state", state.String(),
-		)
-		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateDisconnected {
-			m.EndTransfer(transferID)
-		}
-	})
-
 	// Set remote description (agent's offer)
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -552,10 +541,38 @@ func (m *Manager) ConnectAgentToTransfer(transferID, agentID uuid.UUID, sdpOffer
 	session.AgentAudioTrack = agentAudioTrack
 	session.mu.Unlock()
 
+	// Watch for the agent dropping off, only once the PC belongs to the
+	// session. Registered later than the setup above on purpose: the error
+	// paths there close a PC that was never committed, and a teardown handler
+	// would end the whole transfer instead of just failing this attempt.
+	agentPC.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		m.log.Info("Agent peer connection state changed",
+			"transfer_id", transferID,
+			"state", state.String(),
+		)
+		if peerGone(state) {
+			m.EndTransfer(transferID)
+		}
+	})
+
 	// Wait for agent's audio track, then start bridge
 	go m.completeTransferConnection(session, transferID, agentID, agentTrackReady)
 
 	return localDesc.SDP, nil
+}
+
+// lateCallerTrack re-reads the direction-appropriate remote caller track once
+// session.Bridge has been assigned. It covers the window where the track
+// arrived after a pre-bridge snapshot saw nil but before OnTrack could see
+// the bridge and attach it — without this, nobody would ever drain that
+// track and audio would be one-way again.
+func (m *Manager) lateCallerTrack(session *CallSession) *webrtc.TrackRemote {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.Direction == models.CallDirectionOutgoing {
+		return session.WARemoteTrack
+	}
+	return session.CallerRemoteTrack
 }
 
 // completeTransferConnection waits for the agent's audio track and starts the audio bridge.
@@ -630,6 +647,15 @@ func (m *Manager) completeTransferConnection(session *CallSession, transferID, a
 	safeClose(session.BridgeStarted)
 	session.mu.Unlock()
 
+	// The caller's track may have landed between the snapshot above and the
+	// session.Bridge assignment in setupAudioBridge: OnTrack saw a nil bridge
+	// and handed the track to consumeAudioWithDTMF, which stands down once
+	// BridgeStarted closes. Now that the bridge is visible every new track
+	// goes through AttachCaller, so one re-check here closes the gap.
+	if callerRemote == nil {
+		callerRemote = m.lateCallerTrack(session)
+	}
+
 	// Run DB updates and callbacks in background so the bridge starts
 	// forwarding audio immediately without waiting for I/O.
 	go func() {
@@ -680,12 +706,18 @@ func (m *Manager) completeTransferConnection(session *CallSession, transferID, a
 func (m *Manager) EndTransfer(transferID uuid.UUID) {
 	session := m.findSessionByTransferID(transferID)
 	if session == nil {
+		m.log.Warn("EndTransfer: no live session for transfer, nothing to tear down",
+			"transfer_id", transferID)
 		return
 	}
 
 	session.mu.Lock()
 	if session.TransferStatus == models.CallTransferStatusCompleted {
 		session.mu.Unlock()
+		// Expected on a normal teardown: EndTransfer closes the agent PC,
+		// which re-enters here through the connection-state handler.
+		m.log.Debug("EndTransfer: transfer already completed, skipping",
+			"transfer_id", transferID, "call_id", session.ID)
 		return
 	}
 	session.TransferStatus = models.CallTransferStatusCompleted
@@ -1390,6 +1422,12 @@ func (m *Manager) ResumeCall(callLogID uuid.UUID) error {
 	session.mu.Lock()
 	safeClose(session.BridgeStarted)
 	session.mu.Unlock()
+
+	// Same snapshot/assignment gap as in completeTransferConnection: pick up
+	// a caller track that landed while session.Bridge was still nil.
+	if callerRemote == nil {
+		callerRemote = m.lateCallerTrack(session)
+	}
 
 	// Broadcast resume event before bridge blocks
 	m.broadcastEvent(session.OrganizationID, websocket.TypeCallResumed, map[string]any{

@@ -892,30 +892,30 @@ func (a *App) sendAndSaveInteractiveButtonsRaw(account *models.WhatsAppAccount, 
 	if len(ctaButtons) > 2 {
 		ctaButtons = ctaButtons[:2]
 	}
-		for i, ctaBtn := range ctaButtons {
-			btnTitle, _ := ctaBtn["title"].(string)
-			btnURL, _ := ctaBtn["url"].(string)
-			if btnTitle != "" && btnURL != "" {
-				btnTitle = normalizeMixedDirectionText(btnTitle)
-				// First CTA button carries the body text
-				ctaBody := bodyText
-				if i > 0 {
-					ctaBody = btnTitle
-				}
-				ctx := context.Background()
-				if _, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
-					Account:         account,
-					Contact:         contact,
-					Type:            models.MessageTypeInteractive,
-					InteractiveType: "cta_url",
-					BodyText:        ctaBody,
-					ButtonText:      btnTitle,
-					URL:             btnURL,
-				}, ChatbotSendOptions()); err != nil {
-					return err
-				}
+	for i, ctaBtn := range ctaButtons {
+		btnTitle, _ := ctaBtn["title"].(string)
+		btnURL, _ := ctaBtn["url"].(string)
+		if btnTitle != "" && btnURL != "" {
+			btnTitle = normalizeMixedDirectionText(btnTitle)
+			// First CTA button carries the body text
+			ctaBody := bodyText
+			if i > 0 {
+				ctaBody = btnTitle
+			}
+			ctx := context.Background()
+			if _, err := a.SendOutgoingMessage(ctx, OutgoingMessageRequest{
+				Account:         account,
+				Contact:         contact,
+				Type:            models.MessageTypeInteractive,
+				InteractiveType: "cta_url",
+				BodyText:        ctaBody,
+				ButtonText:      btnTitle,
+				URL:             btnURL,
+			}, ChatbotSendOptions()); err != nil {
+				return err
 			}
 		}
+	}
 
 	// No buttons at all — fall back to text
 	if len(replyButtons) == 0 && len(ctaButtons) == 0 {
@@ -2073,14 +2073,18 @@ func (a *App) saveIncomingMessage(account *models.WhatsAppAccount, contact *mode
 
 	// Dispatch webhook for incoming message
 	a.DispatchWebhook(account.OrganizationID, models.WebhookEventMessageIncoming, MessageEventData{
-		MessageID:       message.ID.String(),
-		ContactID:       contact.ID.String(),
-		ContactPhone:    contact.PhoneNumber,
-		ContactName:     contact.ProfileName,
-		MessageType:     models.MessageType(msgType),
-		Content:         content,
-		WhatsAppAccount: account.Name,
-		Direction:       models.DirectionIncoming,
+		MessageID:        message.ID.String(),
+		ContactID:        contact.ID.String(),
+		ContactPhone:     contact.PhoneNumber,
+		ContactName:      contact.ProfileName,
+		MessageType:      models.MessageType(msgType),
+		Content:          content,
+		MediaURL:         messageMediaURL(&message),
+		MediaMimeType:    message.MediaMimeType,
+		MediaFilename:    message.MediaFilename,
+		ReplyToMessageID: replyToMessageIDString(&message),
+		WhatsAppAccount:  account.Name,
+		Direction:        models.DirectionIncoming,
 	})
 }
 
@@ -2131,4 +2135,12 @@ func (a *App) isWithinBusinessHours(businessHours models.JSONBArray) bool {
 
 	// If no matching day found, assume outside business hours
 	return false
+}
+
+// replyToMessageIDString renders a message's reply target for webhook payloads.
+func replyToMessageIDString(m *models.Message) string {
+	if m == nil || m.ReplyToMessageID == nil {
+		return ""
+	}
+	return m.ReplyToMessageID.String()
 }
