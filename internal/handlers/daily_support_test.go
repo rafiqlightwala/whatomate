@@ -213,3 +213,34 @@ func TestSupportGeneratorStructuredContract(t *testing.T) {
 	_, err := a.supportGenerator(&models.ChatbotSettings{AI: models.AIConfig{Provider: models.AIProviderOpenAI, Model: "gpt-4.1-mini"}})(context.Background(), builtin.InvestifyQueuePrompt, `{"messages":[]}`)
 	require.ErrorContains(t, err, "incomplete")
 }
+
+func TestSupportOutOfOrderCaptureKeepsAllQuestions(t *testing.T) {
+	a, account, contact, job := supportTestSetup(t)
+	a.DB.Unscoped().Delete(&job)
+	now := time.Now()
+	older := models.Message{OrganizationID: account.OrganizationID, WhatsAppAccount: account.Name, ContactID: contact.ID, Direction: models.DirectionIncoming, Content: "Login fails"}
+	newer := models.Message{OrganizationID: account.OrganizationID, WhatsAppAccount: account.Name, ContactID: contact.ID, Direction: models.DirectionIncoming, Content: "Can I use my laptop?"}
+	require.NoError(t, a.DB.Create(&older).Error)
+	require.NoError(t, a.DB.Create(&newer).Error)
+	require.True(t, a.captureSupportIncoming(account, contact, &newer, strconv.FormatInt(now.Unix(), 10)))
+	require.True(t, a.captureSupportIncoming(account, contact, &older, strconv.FormatInt(now.Unix(), 10)))
+	var current models.SupportJob
+	require.NoError(t, a.DB.Where("contact_id=?", contact.ID).First(&current).Error)
+	require.Equal(t, newer.ID, current.LastMessageID)
+	transcript, err := a.supportTranscript(current)
+	require.NoError(t, err)
+	require.Len(t, transcript, 2)
+}
+
+func TestSupportInitialBatchDoesNotOverrideUrgentExpiry(t *testing.T) {
+	a, account, contact, job := supportTestSetup(t)
+	a.DB.Unscoped().Delete(&job)
+	now := time.Now()
+	require.NoError(t, a.DB.Model(&models.SupportPolicy{}).Where("organization_id=?", account.OrganizationID).Update("first_run_at", now.Add(20*time.Hour)).Error)
+	msg := models.Message{OrganizationID: account.OrganizationID, WhatsAppAccount: account.Name, ContactID: contact.ID, Direction: models.DirectionIncoming, Content: "I need login help"}
+	require.NoError(t, a.DB.Create(&msg).Error)
+	require.True(t, a.captureSupportIncoming(account, contact, &msg, strconv.FormatInt(now.Add(-23*time.Hour-55*time.Minute).Unix(), 10)))
+	var current models.SupportJob
+	require.NoError(t, a.DB.Where("contact_id=?", contact.ID).First(&current).Error)
+	require.WithinDuration(t, now, current.DueAt, 2*time.Second)
+}

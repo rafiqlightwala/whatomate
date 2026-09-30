@@ -108,7 +108,15 @@ func (a *App) captureSupportIncoming(account *models.WhatsAppAccount, contact *m
 		if source.After(job.LastInboundAt) {
 			job.LastInboundAt = source
 		}
-		job.LastMessageID = message.ID
+		// Concurrent webhooks can finish out of arrival order. Keep all pending
+		// content while keeping the recovery cursor monotonic.
+		if message.CreatedAt.Before(job.PendingFrom) {
+			job.PendingFrom = message.CreatedAt
+		}
+		var previous models.Message
+		if job.LastMessageID == uuid.Nil || tx.Select("created_at").First(&previous, "id=?", job.LastMessageID).Error != nil || !message.CreatedAt.Before(previous.CreatedAt) {
+			job.LastMessageID = message.ID
+		}
 		job.Revision++
 		job.State = "pending"
 		job.Answer = ""
@@ -127,8 +135,11 @@ func (a *App) captureSupportIncoming(account *models.WhatsAppAccount, contact *m
 		}
 		// Expiry protection still applies during initial collection.
 		safe := job.LastInboundAt.Add(24*time.Hour - support.ExpiryMargin)
-		if safe.Before(due) && safe.After(now) {
+		if err == nil && safe.Before(due) {
 			due = safe
+			if due.Before(now) {
+				due = now
+			}
 		}
 		job.DueAt = due
 		return tx.Omit("Contact").Save(&job).Error
