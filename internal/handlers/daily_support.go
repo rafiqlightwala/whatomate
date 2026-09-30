@@ -749,6 +749,10 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 	if err != nil {
 		return r.SendErrorEnvelope(502, "AI regression check failed", nil, "")
 	}
-	passed := prepared.Decision.Decision == fixture.Decision && len(prepared.Questions) == fixture.Questions && !prepared.Fallback
+	expectedLanguage := "en"
+	if input.Case == "roman_urdu" {
+		expectedLanguage = "roman_ur"
+	}
+	passed := prepared.Decision.Decision == fixture.Decision && len(prepared.Questions) == fixture.Questions && prepared.Language == expectedLanguage && !prepared.Fallback
 	return r.SendEnvelope(map[string]any{"case": input.Case, "passed": passed, "prepared": prepared})
 }

@@ -28,7 +28,7 @@ async function checkPrompts() {
  for (const name of ['greeting','boilerplate','login','combined','resolved','roman_urdu']) {
  const response = await api.post('/chatbot/support/preview', { case: name }, { timeout: 75000 })
  const result = response.data.data
- checks.value.push({name, passed: result.passed, body: result.prepared.body || result.prepared.reason})
+ checks.value.push({name, passed: result.passed, body: `${result.prepared.decision} · ${result.prepared.language} · ${result.prepared.questions?.length || 0} questions\n${result.prepared.reason}\n\n${result.prepared.body || ''}`})
  }
  } catch (err) { toast.error(getErrorMessage(err, 'Prompt check failed')) }
  finally { checking.value = false }
