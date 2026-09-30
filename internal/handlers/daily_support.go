@@ -438,15 +438,11 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 		a.supportJobUpdate(job, map[string]any{"state": "error", "reason": "Chatbot or AI is disabled", "retry_at": now.Add(time.Minute)})
 		return
 	}
-	if job.Attempts >= 3 {
-		a.supportJobUpdate(job, map[string]any{"state": "skipped", "reason": "Stopped after three failed attempts"})
+	if job.Attempts >= 3 && job.Answer != "" {
+		a.supportJobUpdate(job, map[string]any{"state": "skipped", "reason": "Stopped after three rejected send attempts"})
 		return
 	}
 	if job.Answer == "" {
-		if job.Attempts >= 3 {
-			a.supportJobUpdate(job, map[string]any{"state": "skipped", "reason": "Classification unavailable after three attempts; no unverified reply sent"})
-			return
-		}
 		transcript, err := a.supportTranscript(job)
 		if err != nil {
 			a.supportJobUpdate(job, map[string]any{"state": "error", "reason": err.Error(), "attempts": job.Attempts + 1, "retry_at": now.Add(2 * time.Minute)})
@@ -456,7 +452,7 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 		prepared, err := support.Prepare(prepCtx, transcript, a.supportGenerator(settings))
 		cancel()
 		if err != nil {
-			a.supportJobUpdate(job, map[string]any{"state": "error", "reason": "AI preparation failed; automatic retry scheduled", "attempts": job.Attempts + 1, "retry_at": now.Add(2 * time.Minute)})
+			a.supportJobUpdate(job, map[string]any{"state": "error", "reason": "AI preparation unavailable; automatic retry scheduled", "attempts": job.Attempts + 1, "retry_at": now.Add(supportPreparationBackoff(job.Attempts))})
 			a.Log.Error("Support preparation failed", "job_id", job.ID, "error", err)
 			return
 		}
@@ -562,7 +558,25 @@ func (a *App) supportGenerator(settings *models.ChatbotSettings) support.Generat
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("support AI returned HTTP %d", resp.StatusCode)
+			var failure struct {
+				Error struct {
+					Code string `json:"code"`
+					Type string `json:"type"`
+				} `json:"error"`
+			}
+			_ = json.NewDecoder(io.LimitReader(resp.Body, 16000)).Decode(&failure)
+			// Codes identify rate limits versus exhausted billing without exposing
+			// the provider's free-form message, account identifiers or credentials.
+			code := failure.Error.Code
+			if code == "" {
+				code = failure.Error.Type
+			}
+			switch code {
+			case "insufficient_quota", "rate_limit_exceeded", "model_not_found", "invalid_api_key", "invalid_json_schema":
+				return "", fmt.Errorf("support AI returned HTTP %d (%s)", resp.StatusCode, code)
+			default:
+				return "", fmt.Errorf("support AI returned HTTP %d", resp.StatusCode)
+			}
 		}
 		var result struct {
 			Choices []struct {
@@ -771,4 +785,16 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 	}
 	passed := prepared.Decision.Decision == fixture.Decision && len(prepared.Questions) == fixture.Questions && prepared.Language == expectedLanguage && !prepared.Fallback
 	return r.SendEnvelope(map[string]any{"case": input.Case, "passed": passed, "prepared": prepared})
+}
+
+// Provider outages recover automatically while the customer's window remains
+// open; exhausted retries must not permanently discard an unanswered request.
+func supportPreparationBackoff(attempts int) time.Duration {
+	if attempts == 0 {
+		return 2 * time.Minute
+	}
+	if attempts == 1 {
+		return 10 * time.Minute
+	}
+	return 30 * time.Minute
 }

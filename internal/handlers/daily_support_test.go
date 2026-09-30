@@ -244,3 +244,15 @@ func TestSupportInitialBatchDoesNotOverrideUrgentExpiry(t *testing.T) {
 	require.NoError(t, a.DB.Where("contact_id=?", contact.ID).First(&current).Error)
 	require.WithinDuration(t, now, current.DueAt, 2*time.Second)
 }
+
+func TestSupportProviderQuotaDiagnosticIsSanitized(t *testing.T) {
+	a := &App{HTTPClient: &http.Client{Transport: supportTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"insufficient_quota","message":"private provider account detail"}}`)), Header: make(http.Header)}, nil
+	})}}
+	_, err := a.supportGenerator(&models.ChatbotSettings{AI: models.AIConfig{Provider: models.AIProviderOpenAI}})(context.Background(), builtin.InvestifyQueuePrompt, "{}")
+	require.ErrorContains(t, err, "insufficient_quota")
+	require.NotContains(t, err.Error(), "private")
+	require.Equal(t, 2*time.Minute, supportPreparationBackoff(0))
+	require.Equal(t, 10*time.Minute, supportPreparationBackoff(1))
+	require.Equal(t, 30*time.Minute, supportPreparationBackoff(20))
+}
