@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -374,7 +375,7 @@ func (a *App) RunSupportWorker(ctx context.Context) {
 func (a *App) recoverSupportPreparationStops(now time.Time) {
 	result := a.DB.Model(&models.SupportJob{}).
 		Where("send_attempts=0 AND ((state='skipped' AND reason=? AND answer<>'' AND attempts>=3) OR (state='skipped' AND decision<>'' AND reason<>? AND answer='') OR state='ready')", "Stopped after three rejected send attempts", "No substantive pending message").
-		Where("version IN ?", []string{"2026-09-30.4", "2026-09-30.5"}).
+		Where("version IN ?", []string{"2026-09-30.4", "2026-09-30.5", "2026-10-01.1"}).
 		Where("NOT EXISTS (SELECT 1 FROM support_sends WHERE support_sends.job_id=support_jobs.id)").
 		Where("lease_until IS NULL OR lease_until<?", now).
 		Updates(map[string]any{"state": "pending", "attempts": 0, "revision": gorm.Expr("revision+1"), "answer": "", "decision": "", "reason": "Recovered AI preparation retry accounting; preparing again", "version": builtin.InvestifySupportVersion, "retry_at": now, "lease_until": nil})
@@ -775,13 +776,14 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 		Decision  string
 		Questions int
 	}{
-		"greeting":    {[]string{"AOA"}, "skip", 0},
-		"boilerplate": {[]string{"My Investify user email is demo@example.test and I have the following issues or feedback about the iOS App:"}, "skip", 0},
-		"vague_issue": {[]string{"Hey", "Why your app is not working"}, "email", 1},
-		"login":       {[]string{"I'm having issues logging in"}, "answer", 1},
-		"combined":    {[]string{"I forgot my password. I already checked spam for the reset email.", "Can I use my portfolio on my laptop?", "Thanks"}, "answer", 2},
-		"resolved":    {[]string{"I cannot log in", "It is fixed now, I signed in successfully. No help needed, thanks."}, "skip", 0},
-		"roman_urdu":  {[]string{"AOA, login nahi ho raha. Laptop par bhi Investify use kar sakta hoon?"}, "answer", 2},
+		"greeting":        {[]string{"AOA"}, "skip", 0},
+		"boilerplate":     {[]string{"My Investify user email is demo@example.test and I have the following issues or feedback about the iOS App:"}, "skip", 0},
+		"feature_request": {[]string{"Please add custom stock price alerts, for example notify me when OGDC crosses a price I choose."}, "answer", 1},
+		"vague_issue":     {[]string{"Hey", "Why your app is not working"}, "email", 1},
+		"login":           {[]string{"I'm having issues logging in"}, "answer", 1},
+		"combined":        {[]string{"I forgot my password. I already checked spam for the reset email.", "Can I use my portfolio on my laptop?", "Thanks"}, "answer", 2},
+		"resolved":        {[]string{"I cannot log in", "It is fixed now, I signed in successfully. No help needed, thanks."}, "skip", 0},
+		"roman_urdu":      {[]string{"AOA, login nahi ho raha. Laptop par bhi Investify use kar sakta hoon?"}, "answer", 2},
 	}
 	fixture, ok := cases[input.Case]
 	if !ok {
@@ -806,6 +808,10 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 		expectedLanguage = "roman_ur"
 	}
 	passed := prepared.Decision.Decision == fixture.Decision && len(prepared.Questions) == fixture.Questions && prepared.Language == expectedLanguage && !prepared.Fallback
+	if input.Case == "feature_request" {
+		body := strings.ToLower(prepared.Body)
+		passed = passed && !strings.Contains(body, "does not have") && !strings.Contains(body, "not available") && !strings.Contains(body, "browser notifications")
+	}
 	return r.SendEnvelope(map[string]any{"case": input.Case, "passed": passed, "prepared": prepared})
 }
 

@@ -1,12 +1,12 @@
 # Investify support knowledge
 
-Knowledge revision: 2026-09-30. This document contains product facts and support guidance. Scheduling, quotas and whether to send a reply are application decisions.
+Knowledge revision: 2026-10-01. This document contains product facts and support guidance. Scheduling, quotas and whether to send a reply are application decisions.
 
 ## Product and platforms
 
 Investify provides PSX market information and portfolio tracking. It is available on Android, iPhone/iPad and the web at https://www.investify.pk. A desktop browser works without an emulator or a native Windows/Mac installation. The same Investify account works across these platforms; watchlists and portfolios sync after sign-in. Never tell customers that the web app does not exist.
 
-The web app includes stock pages, prices, charts, financial information, news, announcements and portfolio tools. Mobile push alerts and browser notifications are not interchangeable; do not promise identical notification features on every platform.
+The web app includes stock pages, prices, charts, financial information, news, announcements and portfolio tools. Push alerts are documented for the Android and iOS apps. Web notification parity is unconfirmed; do not promise browser notifications.
 
 Source: https://www.investify.pk/investify-for-pc (checked 2026-09-30).
 
@@ -41,6 +41,12 @@ For an existing purchase, use the relevant Google Play or Apple subscription man
 For inappropriate ads, acknowledge the report and request a screenshot by email. Do not confuse inappropriate ads with an ad-blocking warning. For an explicit blocking warning, suggest checking whether a browser extension or network filter affects Investify; avoid blanket instructions to disable security or privacy protections for unrelated issues.
 
 Source: https://www.investify.pk/faq (checked 2026-09-30).
+
+## Alerts and feature requests
+
+The official FAQ describes customizable notifications for stock market movement, portfolio movement and news updates, with frequency controls in app settings. The precise availability of individual stock price thresholds or custom price-trigger alerts is unconfirmed. Never state that such a feature exists or does not exist. For a request to add it, acknowledge the specific suggestion and direct details to support email; you may mention the documented general notifications without pretending they satisfy the request.
+
+Source: https://www.investify.pk/faq and https://www.investify.pk/investify-for-pc (checked 2026-10-01).
 
 ## Unknown features and feedback
 

@@ -25,7 +25,7 @@ const checks = ref<{name: string; passed: boolean; body: string}[]>([])
 async function checkPrompts() {
  checking.value = true; checks.value = []
  try {
- for (const name of ['greeting','boilerplate','login','combined','resolved','roman_urdu','vague_issue']) {
+ for (const name of ['greeting','boilerplate','login','combined','resolved','roman_urdu','vague_issue','feature_request']) {
  const response = await api.post('/chatbot/support/preview', { case: name }, { timeout: 75000 })
  const result = response.data.data
  checks.value.push({name, passed: result.passed, body: `${result.prepared.decision} · ${result.prepared.language} · ${result.prepared.questions?.length || 0} questions\n${result.prepared.reason}\n${(result.prepared.questions || []).map((q: {category: string; question: string}) => `${q.category}: ${q.question}`).join('\n')}\n\n${result.prepared.body || ''}`})
@@ -106,7 +106,7 @@ onUnmounted(() => clearInterval(timer))
    </div>
    <div class="flex gap-2"><Button variant="outline" :disabled="page === 0" @click="page--; load()">Previous</Button><Button variant="outline" :disabled="(data.jobs?.length || 0) < 50" @click="page++; load()">Next</Button></div>
    <details><summary class="cursor-pointer font-semibold">Prompt checks</summary>
-    <p class="text-sm opacity-70 my-2">Runs seven synthetic cases using the configured model. No WhatsApp messages are sent.</p>
+    <p class="text-sm opacity-70 my-2">Runs eight synthetic cases using the configured model. No WhatsApp messages are sent.</p>
     <Button variant="outline" :disabled="checking" @click="checkPrompts">{{ checking ? 'Checking prompts…' : 'Run prompt checks' }}</Button>
     <details v-for="check in checks" :key="check.name" class="mt-2"><summary>{{ check.passed ? 'Passed' : 'Needs attention' }}: {{ check.name }}</summary><p class="whitespace-pre-wrap text-sm p-2">{{ check.body }}</p></details>
    </details>
