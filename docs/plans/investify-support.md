@@ -158,3 +158,12 @@ Operational limits: AI currently uses the existing OpenAI configuration. Media i
 - The original configured model, gpt-4.1-nano, was restored. Collection and bounded send safeguards remain active. Provider preparation failures retry after 2, 10 and then 30 minutes while the reply window remains open. No synthetic test sent a customer a WhatsApp message.
 
 **Outstanding verification:** restore working OpenAI access and rerun the live prompt checks, then review prepared answers before the first batch. Deployment and queue capture are verified; AI reply readiness is not yet confirmed. The OpenAI account's quota/billing or access needs checking outside Whatomate.
+
+
+## First batch audit and repair — 1 October 2026
+
+The first audit after 09:00 PKT found 45 captured conversations and zero October sends. OpenAI had begun returning prepared replies, but a retry-accounting defect treated accumulated preparation failures as rejected WhatsApp sends. Prepared answers were incorrectly skipped, including jobs due the next day.
+
+The repair separates AI preparation failures from definitive automatic send rejections. Successful preparation resets the AI counter. Three actual rejected automatic sends enter a visible `send_failed` state; failed manual sends do not consume those attempts. Targeted recovery rechecks unsent decisions from the affected prompt versions, excludes every job with a dispatch reservation, preserves due dates and increments revision before preparing again. Normal window, human takeover, customer-month and number-budget guards still apply.
+
+The classifier now explicitly preserves a vague app complaint as support intent and describes the customer's need rather than inventing an agent follow-up question. The approved knowledge no longer contains a historical loading-incident anecdote that the model could repeat as a current diagnosis. Prompt/knowledge version is `2026-10-01.1`. Sending was paused during repair and real-model checks; capture continues.

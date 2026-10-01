@@ -122,6 +122,7 @@ func (a *App) captureSupportIncoming(account *models.WhatsAppAccount, contact *m
 		job.Answer = ""
 		job.Decision = ""
 		job.Attempts = 0
+		job.SendAttempts = 0
 		job.LeaseUntil = nil
 		job.RetryAt = now.Add(time.Minute)
 		due, err := support.DueAt(now, job.LastInboundAt)
@@ -341,9 +342,9 @@ func (a *App) finishSupportSend(msg *models.Message, wamid string, sendErr error
 		if !reservation.Automatic && state != "rejected" {
 			updates["revision"] = gorm.Expr("revision+1")
 		}
-		if state == "rejected" {
+		if state == "rejected" && reservation.Automatic {
 			updates["retry_at"] = time.Now().Add(2 * time.Minute)
-			updates["attempts"] = gorm.Expr("attempts+1")
+			updates["send_attempts"] = gorm.Expr("send_attempts+1")
 		}
 		return tx.Model(&models.SupportJob{}).Where("organization_id=? AND contact_id=?", reservation.OrganizationID, reservation.ContactID).Updates(updates).Error
 	}); err != nil {
@@ -365,9 +366,29 @@ func (a *App) RunSupportWorker(ctx context.Context) {
 	}
 }
 
+// Recover the legacy retry-accounting defect and recheck unsent AI decisions
+// from the affected prompt versions. Deterministic noise remains skipped. A job with any
+// dispatch reservation is excluded, including rejected or uncertain sends.
+// Clear its answer so the current prompts prepare it again, then let normal
+// window, revision, human takeover, schedule and quota guards decide dispatch.
+func (a *App) recoverSupportPreparationStops(now time.Time) {
+	result := a.DB.Model(&models.SupportJob{}).
+		Where("send_attempts=0 AND ((state='skipped' AND reason=? AND answer<>'' AND attempts>=3) OR (state='skipped' AND decision<>'' AND reason<>? AND answer='') OR state='ready')", "Stopped after three rejected send attempts", "No substantive pending message").
+		Where("version IN ?", []string{"2026-09-30.4", "2026-09-30.5"}).
+		Where("NOT EXISTS (SELECT 1 FROM support_sends WHERE support_sends.job_id=support_jobs.id)").
+		Where("lease_until IS NULL OR lease_until<?", now).
+		Updates(map[string]any{"state": "pending", "attempts": 0, "revision": gorm.Expr("revision+1"), "answer": "", "decision": "", "reason": "Recovered AI preparation retry accounting; preparing again", "version": builtin.InvestifySupportVersion, "retry_at": now, "lease_until": nil})
+	if result.Error != nil {
+		a.Log.Error("Support preparation recovery failed", "error", result.Error)
+	} else if result.RowsAffected > 0 {
+		a.Log.Info("Recovered support preparation stops", "jobs", result.RowsAffected)
+	}
+}
+
 func (a *App) supportTick(ctx context.Context) {
 	now := time.Now()
 	a.reconcileSupportIncoming()
+	a.recoverSupportPreparationStops(now)
 	// A process crash after reservation is an ambiguous send, never a retry.
 	a.DB.Model(&models.SupportSend{}).Where("state='reserved' AND created_at<?", now.Add(-3*time.Minute)).Update("state", "uncertain")
 	a.DB.Model(&models.SupportJob{}).Where("state='sending' AND updated_at<?", now.Add(-3*time.Minute)).Updates(map[string]any{"state": "uncertain", "reason": "Worker stopped during dispatch; no duplicate retry"})
@@ -438,8 +459,8 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 		a.supportJobUpdate(job, map[string]any{"state": "error", "reason": "Chatbot or AI is disabled", "retry_at": now.Add(time.Minute)})
 		return
 	}
-	if job.Attempts >= 3 && job.Answer != "" {
-		a.supportJobUpdate(job, map[string]any{"state": "skipped", "reason": "Stopped after three rejected send attempts"})
+	if job.SendAttempts >= 3 {
+		a.supportJobUpdate(job, map[string]any{"state": "send_failed", "reason": "Stopped after three rejected WhatsApp sends"})
 		return
 	}
 	if job.Answer == "" {
@@ -465,7 +486,7 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 		if body != "" {
 			body += "\nhttps://wa.recubetech.com/support/email"
 		}
-		a.supportJobUpdate(job, map[string]any{"state": state, "decision": string(decision), "answer": body, "version": prepared.Version, "reason": prepared.Reason, "retry_at": now})
+		a.supportJobUpdate(job, map[string]any{"state": state, "attempts": 0, "decision": string(decision), "answer": body, "version": prepared.Version, "reason": prepared.Reason, "retry_at": now})
 		return // The next tick rechecks revision and manual takeover before dispatch.
 	}
 	if policy.Paused {
@@ -756,6 +777,7 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 	}{
 		"greeting":    {[]string{"AOA"}, "skip", 0},
 		"boilerplate": {[]string{"My Investify user email is demo@example.test and I have the following issues or feedback about the iOS App:"}, "skip", 0},
+		"vague_issue": {[]string{"Hey", "Why your app is not working"}, "email", 1},
 		"login":       {[]string{"I'm having issues logging in"}, "answer", 1},
 		"combined":    {[]string{"I forgot my password. I already checked spam for the reset email.", "Can I use my portfolio on my laptop?", "Thanks"}, "answer", 2},
 		"resolved":    {[]string{"I cannot log in", "It is fixed now, I signed in successfully. No help needed, thanks."}, "skip", 0},

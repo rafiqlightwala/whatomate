@@ -32,7 +32,8 @@ type SupportJob struct {
 	DueAt          time.Time  `gorm:"index" json:"due_at"`
 	RetryAt        time.Time  `gorm:"index" json:"retry_at"`
 	LeaseUntil     *time.Time `json:"lease_until"`
-	Attempts       int        `json:"attempts"`
+	Attempts       int        `json:"attempts"` // AI preparation failures only.
+	SendAttempts   int        `gorm:"not null;default:0" json:"send_attempts"`
 	Decision       string     `gorm:"type:text" json:"decision"`
 	Answer         string     `gorm:"type:text" json:"answer"`
 	Reason         string     `json:"reason"`

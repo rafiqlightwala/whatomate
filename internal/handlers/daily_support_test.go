@@ -167,7 +167,7 @@ func (f supportTransport) RoundTrip(r *http.Request) (*http.Response, error) { r
 
 func TestSupportWorkerPreparesThenSendsOnce(t *testing.T) {
 	a, account, contact, job := supportTestSetup(t)
-	require.NoError(t, a.DB.Model(&job).Updates(map[string]any{"state": "pending", "answer": ""}).Error)
+	require.NoError(t, a.DB.Model(&job).Updates(map[string]any{"state": "pending", "answer": "", "attempts": 7}).Error)
 	msg := models.Message{OrganizationID: account.OrganizationID, WhatsAppAccount: account.Name, ContactID: contact.ID, Direction: models.DirectionIncoming, MessageType: models.MessageTypeText, Content: "Can I use Investify on my laptop?"}
 	require.NoError(t, a.DB.Create(&msg).Error)
 	require.NoError(t, a.DB.Create(&models.ChatbotSettings{OrganizationID: account.OrganizationID, IsEnabled: true, AI: models.AIConfig{Enabled: true, Provider: models.AIProviderOpenAI, APIKey: "test-only", Model: "gpt-4.1-nano"}}).Error)
@@ -188,6 +188,8 @@ func TestSupportWorkerPreparesThenSendsOnce(t *testing.T) {
 	a.processSupportJob(context.Background(), policy, job)
 	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
 	require.Equal(t, "ready", job.State)
+	require.Zero(t, job.Attempts)
+	require.Zero(t, job.SendAttempts)
 	require.Contains(t, job.Answer, "support@investify.pk")
 	a.processSupportJob(context.Background(), policy, job)
 	var sends int64
@@ -255,4 +257,58 @@ func TestSupportProviderQuotaDiagnosticIsSanitized(t *testing.T) {
 	require.Equal(t, 2*time.Minute, supportPreparationBackoff(0))
 	require.Equal(t, 10*time.Minute, supportPreparationBackoff(1))
 	require.Equal(t, 30*time.Minute, supportPreparationBackoff(20))
+}
+
+func TestSupportRecoversOnlyUnsentLegacyPreparationStops(t *testing.T) {
+	a, account, _, job := supportTestSetup(t)
+	require.NoError(t, a.DB.Model(&job).Updates(map[string]any{"state": "skipped", "reason": "Stopped after three rejected send attempts", "attempts": 7, "version": "2026-09-30.5"}).Error)
+	// Even a rejected reservation must exclude a job from this targeted repair.
+	other := testutil.CreateTestContact(t, a.DB, account.OrganizationID)
+	held := models.SupportJob{OrganizationID: account.OrganizationID, Account: account.Name, ContactID: other.ID, Revision: 1, State: "skipped", Reason: "Stopped after three rejected send attempts", Attempts: 7, Version: "2026-09-30.5", Answer: "old answer"}
+	require.NoError(t, a.DB.Create(&held).Error)
+	require.NoError(t, a.DB.Create(&models.SupportSend{OrganizationID: account.OrganizationID, PhoneID: account.PhoneID, ContactID: other.ID, JobID: &held.ID, MessageID: uuid.New(), State: "rejected"}).Error)
+	a.recoverSupportPreparationStops(time.Now())
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	require.Equal(t, "pending", job.State)
+	require.EqualValues(t, 2, job.Revision)
+	require.Empty(t, job.Answer)
+	require.Zero(t, job.Attempts)
+	require.NoError(t, a.DB.First(&held, "id=?", held.ID).Error)
+	require.Equal(t, "skipped", held.State)
+	// Idempotent and the stale worker cannot overwrite the recovered revision.
+	a.recoverSupportPreparationStops(time.Now())
+	stale := job
+	stale.Revision--
+	a.supportJobUpdate(stale, map[string]any{"state": "skipped"})
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	require.EqualValues(t, 2, job.Revision)
+	require.Equal(t, "pending", job.State)
+}
+
+func TestSupportOnlyAutomaticRejectionsExhaustSendAttempts(t *testing.T) {
+	a, account, contact, job := supportTestSetup(t)
+	opts := ChatbotSendOptions()
+	opts.supportJobID = job.ID
+	opts.supportRevision = job.Revision
+	req := OutgoingMessageRequest{Account: account, Contact: contact, Type: models.MessageTypeText, Content: "answer"}
+	for attempt := 1; attempt <= 3; attempt++ {
+		require.NoError(t, a.DB.Model(&job).Update("state", "ready").Error)
+		msg := a.createOutgoingMessage(req, opts)
+		_, err := a.reserveSupportSend(req, opts, msg)
+		require.NoError(t, err)
+		require.NoError(t, a.DB.Model(msg).Update("status", models.MessageStatusFailed).Error)
+		a.finishSupportSend(msg, "", &whatsapp.RequestError{StatusCode: 400, Message: "rejected"})
+		a.finishSupportSend(msg, "", &whatsapp.RequestError{StatusCode: 400, Message: "duplicate result"})
+		require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+		require.Equal(t, attempt, job.SendAttempts)
+		require.Zero(t, job.Attempts)
+	}
+	require.NoError(t, a.DB.Create(&models.ChatbotSettings{OrganizationID: account.OrganizationID, IsEnabled: true, AI: models.AIConfig{Enabled: true}}).Error)
+	policy, _ := supportPolicy(a.DB, account.OrganizationID)
+	a.processSupportJob(context.Background(), policy, job)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	require.Equal(t, "send_failed", job.State)
+	var sends int64
+	require.NoError(t, a.DB.Model(&models.SupportSend{}).Where("job_id=?", job.ID).Count(&sends).Error)
+	require.EqualValues(t, 3, sends)
 }

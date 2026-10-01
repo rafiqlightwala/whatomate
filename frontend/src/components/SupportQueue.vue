@@ -7,7 +7,7 @@ import { getErrorMessage } from '@/lib/api-utils'
 
 interface Job {
  id: string; contact_id: string; account: string; state: string; due_at: string;
- answer: string; reason: string; decision: string; version: string;
+ answer: string; reason: string; decision: string; version: string; attempts: number; send_attempts: number;
  contact?: { profile_name: string; phone_number: string }
 }
 interface QueueData {
@@ -25,7 +25,7 @@ const checks = ref<{name: string; passed: boolean; body: string}[]>([])
 async function checkPrompts() {
  checking.value = true; checks.value = []
  try {
- for (const name of ['greeting','boilerplate','login','combined','resolved','roman_urdu']) {
+ for (const name of ['greeting','boilerplate','login','combined','resolved','roman_urdu','vague_issue']) {
  const response = await api.post('/chatbot/support/preview', { case: name }, { timeout: 75000 })
  const result = response.data.data
  checks.value.push({name, passed: result.passed, body: `${result.prepared.decision} · ${result.prepared.language} · ${result.prepared.questions?.length || 0} questions\n${result.prepared.reason}\n${(result.prepared.questions || []).map((q: {category: string; question: string}) => `${q.category}: ${q.question}`).join('\n')}\n\n${result.prepared.body || ''}`})
@@ -89,7 +89,7 @@ onUnmounted(() => clearInterval(timer))
     </div>
    </div>
    <div class="flex flex-wrap gap-3 text-sm"><span v-for="count in data.counts" :key="count.state">{{ count.state }}: <strong>{{ count.count }}</strong></span></div>
-   <div class="flex items-center gap-3"><label>Show <select v-model="state" class="bg-transparent border rounded p-2" @change="filter"><option value="">All states</option><option v-for="s in ['pending','ready','skipped','suppressed','sent','expired','error','uncertain','budget_paused']" :key="s" :value="s">{{ s }}</option></select></label><span class="text-xs opacity-60">Updates every 30 seconds. Select a row to inspect the answer.</span></div>
+   <div class="flex items-center gap-3"><label>Show <select v-model="state" class="bg-transparent border rounded p-2" @change="filter"><option value="">All states</option><option v-for="s in ['pending','ready','skipped','suppressed','sent','expired','error','uncertain','send_failed','budget_paused']" :key="s" :value="s">{{ s }}</option></select></label><span class="text-xs opacity-60">Updates every 30 seconds. Select a row to inspect the answer.</span></div>
    <p v-if="!data.jobs?.length" class="py-4 opacity-70">No conversations in this view yet. New questions will appear here after consolidated support is enabled.</p>
    <div v-for="job in data.jobs" :key="job.id" class="border border-white/10 light:border-gray-200 rounded-lg">
     <button class="w-full p-3 text-left flex flex-wrap justify-between gap-2 hover:bg-white/5" :aria-expanded="selected === job.id" @click="selected = selected === job.id ? '' : job.id">
@@ -101,12 +101,12 @@ onUnmounted(() => clearInterval(timer))
      <p>{{ details(job).summary }}</p>
      <ol class="list-decimal pl-5"><li v-for="(q, index) in details(job).questions" :key="index">{{ q.question }}<p v-if="q.attempted_steps?.length" class="text-sm opacity-60">Already tried: {{ q.attempted_steps.join('; ') }}</p></li></ol>
      <h3 class="font-semibold">Prepared reply</h3><p class="whitespace-pre-wrap text-sm">{{ job.answer || 'No reply prepared for this state.' }}</p>
-     <p class="text-xs opacity-60">{{ job.account }} · {{ job.version }}</p>
+     <p class="text-xs opacity-60">{{ job.account }} · {{ job.version }} · AI retries: {{ job.attempts }} · rejected sends: {{ job.send_attempts }}</p>
     </div>
    </div>
    <div class="flex gap-2"><Button variant="outline" :disabled="page === 0" @click="page--; load()">Previous</Button><Button variant="outline" :disabled="(data.jobs?.length || 0) < 50" @click="page++; load()">Next</Button></div>
    <details><summary class="cursor-pointer font-semibold">Prompt checks</summary>
-    <p class="text-sm opacity-70 my-2">Runs six synthetic cases using the configured model. No WhatsApp messages are sent.</p>
+    <p class="text-sm opacity-70 my-2">Runs seven synthetic cases using the configured model. No WhatsApp messages are sent.</p>
     <Button variant="outline" :disabled="checking" @click="checkPrompts">{{ checking ? 'Checking prompts…' : 'Run prompt checks' }}</Button>
     <details v-for="check in checks" :key="check.name" class="mt-2"><summary>{{ check.passed ? 'Passed' : 'Needs attention' }}: {{ check.name }}</summary><p class="whitespace-pre-wrap text-sm p-2">{{ check.body }}</p></details>
    </details>

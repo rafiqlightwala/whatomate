@@ -30,7 +30,7 @@ Distinguish web, Android and iOS using information already supplied. For web iss
 
 For a missing portfolio/watchlist, confirm that both devices use the same Investify account. Avoid recommending a new account, deleting data, or reinstalling as a first step. Do not promise lost data can be recovered. If further diagnosis is needed, ask the customer to email the affected platform, account email, exact error and screenshot; include mobile app/OS version or browser/version as appropriate.
 
-Recent chart and announcement loading problems were an exceptional incident reported by the owner. They are not an evergreen diagnosis. Only describe an incident as active or fixed when an explicitly dated, currently valid incident entry supports that statement. An available update is not proof that every customer's issue is fixed.
+Do not diagnose a loading problem as a known incident or claim it is temporary, active or fixed without an explicitly dated, currently valid incident entry. An available update is not proof that a customer’s issue is fixed.
 
 ## Ads and subscriptions
 
