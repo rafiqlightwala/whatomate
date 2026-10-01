@@ -123,3 +123,18 @@ func TestOversizedTranscriptIsNotSilentlyTruncated(t *testing.T) {
 	require.ErrorContains(t, err, "compaction")
 	require.Empty(t, got.Body)
 }
+
+func TestPrepareRemovesLegacyEmailURLFromModelOutput(t *testing.T) {
+	calls := 0
+	got, err := Prepare(context.Background(), sampleMessages(), func(context.Context, string, string) (string, error) {
+		calls++
+		if calls == 1 {
+			return decisionJSON(sampleDecision()), nil
+		}
+		return "Open https://www.investify.pk on your laptop. For support use https://wa.recubetech.com/support/email", nil
+	})
+	require.NoError(t, err)
+	require.NotContains(t, got.Body, "wa.recubetech.com/support/email")
+	require.Contains(t, got.Body, "support@investify.pk")
+	require.Contains(t, got.Body, "https://www.investify.pk")
+}

@@ -95,7 +95,7 @@ func Prepare(ctx context.Context, messages []Message, generate Generate) (Prepar
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	body = strings.TrimSpace(body)
+	body = CleanEmailHandoff(body)
 	if answerErr != nil || body == "" || !utf8.ValidString(body) || utf8.RuneCountInString(body) > MaxBodyRunes {
 		// Intent has already been established. Preserve the one-message policy
 		// using a complete email handoff rather than truncating useful advice.
@@ -212,4 +212,13 @@ func fallback(language string) string {
 	default:
 		return "We could not prepare a complete answer here. Please include your question, the platform you use (web, Android or iOS), and any relevant error or screenshot in your email. Do not send passwords or verification codes."
 	}
+}
+
+// CleanEmailHandoff also protects queued replies prepared before the owner
+// removed the public email landing page from WhatsApp messages.
+func CleanEmailHandoff(body string) string {
+	for _, url := range []string{"https://wa.recubetech.com/support/email", "http://wa.recubetech.com/support/email"} {
+		body = strings.ReplaceAll(body, url, "support@investify.pk")
+	}
+	return strings.TrimSpace(body)
 }

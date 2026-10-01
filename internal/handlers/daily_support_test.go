@@ -191,10 +191,18 @@ func TestSupportWorkerPreparesThenSendsOnce(t *testing.T) {
 	require.Zero(t, job.Attempts)
 	require.Zero(t, job.SendAttempts)
 	require.Contains(t, job.Answer, "support@investify.pk")
+	require.NotContains(t, job.Answer, "wa.recubetech.com/support/email")
+	// An older persisted reply is cleaned again immediately before dispatch.
+	job.Answer += "\nhttps://wa.recubetech.com/support/email"
+	require.NoError(t, a.DB.Model(&job).Update("answer", job.Answer).Error)
 	a.processSupportJob(context.Background(), policy, job)
 	var sends int64
 	require.NoError(t, a.DB.Model(&models.SupportSend{}).Where("organization_id=?", account.OrganizationID).Count(&sends).Error)
 	require.EqualValues(t, 1, sends)
+	var outgoing models.Message
+	require.NoError(t, a.DB.Where("contact_id=? AND direction=?", contact.ID, models.DirectionOutgoing).First(&outgoing).Error)
+	require.Equal(t, models.MessageTypeText, outgoing.MessageType)
+	require.NotContains(t, outgoing.Content, "wa.recubetech.com/support/email")
 	a.processSupportJob(context.Background(), policy, job)
 	require.NoError(t, a.DB.Model(&models.SupportSend{}).Where("organization_id=?", account.OrganizationID).Count(&sends).Error)
 	require.EqualValues(t, 1, sends)

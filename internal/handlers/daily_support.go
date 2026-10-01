@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/shridarpatil/whatomate/internal/builtin"
@@ -375,7 +374,7 @@ func (a *App) RunSupportWorker(ctx context.Context) {
 func (a *App) recoverSupportPreparationStops(now time.Time) {
 	result := a.DB.Model(&models.SupportJob{}).
 		Where("send_attempts=0 AND ((state='skipped' AND reason=? AND answer<>'' AND attempts>=3) OR (state='skipped' AND decision<>'' AND reason<>? AND answer='') OR state='ready')", "Stopped after three rejected send attempts", "No substantive pending message").
-		Where("version IN ?", []string{"2026-09-30.4", "2026-09-30.5", "2026-10-01.1"}).
+		Where("version IN ?", []string{"2026-09-30.4", "2026-09-30.5", "2026-10-01.1", "2026-10-01.2"}).
 		Where("NOT EXISTS (SELECT 1 FROM support_sends WHERE support_sends.job_id=support_jobs.id)").
 		Where("lease_until IS NULL OR lease_until<?", now).
 		Updates(map[string]any{"state": "pending", "attempts": 0, "revision": gorm.Expr("revision+1"), "answer": "", "decision": "", "reason": "Recovered AI preparation retry accounting; preparing again", "version": builtin.InvestifySupportVersion, "retry_at": now, "lease_until": nil})
@@ -483,10 +482,7 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 		if prepared.Decision.Decision == "skip" {
 			state = "skipped"
 		}
-		body := prepared.Body
-		if body != "" {
-			body += "\nhttps://wa.recubetech.com/support/email"
-		}
+		body := support.CleanEmailHandoff(prepared.Body)
 		a.supportJobUpdate(job, map[string]any{"state": state, "attempts": 0, "decision": string(decision), "answer": body, "version": prepared.Version, "reason": prepared.Reason, "retry_at": now})
 		return // The next tick rechecks revision and manual takeover before dispatch.
 	}
@@ -517,14 +513,8 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 	opts := ChatbotSendOptions()
 	opts.supportJobID = job.ID
 	opts.supportRevision = job.Revision
-	req := OutgoingMessageRequest{Account: &account, Contact: &contact, Type: models.MessageTypeText, Content: job.Answer}
-	if utf8.RuneCountInString(job.Answer) <= 1024 {
-		req.Type = models.MessageTypeInteractive
-		req.InteractiveType = "cta_url"
-		req.BodyText = job.Answer
-		req.ButtonText = "Email support"
-		req.URL = "https://wa.recubetech.com/support/email"
-	}
+	req := OutgoingMessageRequest{Account: &account, Contact: &contact, Type: models.MessageTypeText, Content: support.CleanEmailHandoff(job.Answer)}
+
 	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if _, err := a.SendOutgoingMessage(sendCtx, req, opts); err != nil {

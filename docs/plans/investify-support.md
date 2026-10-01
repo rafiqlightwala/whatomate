@@ -79,9 +79,7 @@ Keep the current provider/model initially and test it on anonymized fixtures. Co
 
 ## Email call to action
 
-Serve a public HTTPS support page with an “Open email app” mailto link and a copyable support address. Explain which platform/error details to include and that passwords or codes should never be sent. Do not put customer identifiers into the public URL.
-
-A WhatsApp URL button has a smaller message-body limit of 1,024 characters. Use it only when the entire consolidated answer fits. Otherwise send one plain-text message with the support-page link and email address. Do not shorten a useful answer solely to fit a button, or send a second message for the button.
+Use the direct address `support@investify.pk` in the same plain-text reply. On 1 October the owner removed the support landing-page URL from outgoing replies. Do not include that URL or attach a URL button. Existing queued answers are re-prepared and the sender also replaces the legacy URL before dispatch. Already sent messages remain part of the send ledger and are never resent.
 
 ## Implementation sequence
 
@@ -169,3 +167,5 @@ The repair separates AI preparation failures from definitive automatic send reje
 The classifier now explicitly preserves a vague app complaint as support intent and describes the customer's need rather than inventing an agent follow-up question. The approved knowledge no longer contains a historical loading-incident anecdote that the model could repeat as a current diagnosis. Prompt/knowledge version is `2026-10-01.1`. Sending was paused during repair and real-model checks; capture continues.
 
 A further feature-request spot check exposed an unsupported claim that custom stock alerts do not exist. The official FAQ confirms general market/portfolio/news notifications; individual price thresholds remain unconfirmed. Knowledge version `2026-10-01.2` makes that distinction explicit and re-prepares only unsent affected answers. An eighth live fixture covers feature suggestions. Two replies were accepted before this brief second pause; those reservations are excluded from re-preparation.
+
+The owner requested removal of the email landing-page URL after the catch-up batch accepted 31 replies. Automation was paused immediately for version `2026-10-01.3`: new replies use plain text and the direct support email, with no landing-page link or button. A final send-time cleaner protects previously prepared bodies, while sent reservations remain excluded from recovery.
