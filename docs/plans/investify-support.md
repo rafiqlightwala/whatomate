@@ -169,3 +169,12 @@ The classifier now explicitly preserves a vague app complaint as support intent 
 A further feature-request spot check exposed an unsupported claim that custom stock alerts do not exist. The official FAQ confirms general market/portfolio/news notifications; individual price thresholds remain unconfirmed. Knowledge version `2026-10-01.2` makes that distinction explicit and re-prepares only unsent affected answers. An eighth live fixture covers feature suggestions. Two replies were accepted before this brief second pause; those reservations are excluded from re-preparation.
 
 The owner requested removal of the email landing-page URL after the catch-up batch accepted 31 replies. Automation was paused immediately for version `2026-10-01.3`: new replies use plain text and the direct support email, with no landing-page link or button. A final send-time cleaner protects previously prepared bodies, while sent reservations remain excluded from recovery.
+
+
+## Final live verification — 1 October 2026
+
+- Deployed application commit `548baec`; [release run 36822189652](https://github.com/rafiqlightwala/whatomate/actions/runs/36822189652) succeeded. Health reports `2026-10-01.3` and the policy is active.
+- WhatsApp accepted 31 catch-up replies. The October number budget is 31/1,000. Ten empty introductions/greetings were skipped; three eligible chats are ready for 2 October at 09:00 PKT. There are no pending preparation errors, failed sends, uncertain sends or expired jobs in the final snapshot.
+- One conversation remains assigned to a human. One already-replied customer sent a new follow-up; the monthly guard suppressed a second automated response. This changes that customer's job state from sent to suppressed while preserving the original send and budget.
+- Eight live-model fixtures passed on gpt-4.1-mini before the URL removal. Focused race tests after removal confirmed both newly generated output and previously persisted replies cannot dispatch the legacy URL, and the sender uses plain text. A real future login reply was inspected in the live UI and contains the direct support email without the landing-page URL or button.
+- The 31 earlier replies had already included the landing-page link when the owner requested removal. They remain recorded and were not resent. Only unsent jobs were re-prepared under version 2026-10-01.3.
