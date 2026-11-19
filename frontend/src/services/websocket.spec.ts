@@ -15,7 +15,7 @@ vi.mock('@/stores/transfers', () => ({ useTransfersStore: () => ({}) }))
 vi.mock('@/stores/calling', () => ({ useCallingStore: () => ({}) }))
 vi.mock('@/stores/notes', () => ({ useNotesStore: () => ({}) }))
 vi.mock('@/router', () => ({ default: {} }))
-vi.mock('vue-sonner', () => ({ toast: {} }))
+vi.mock('@/lib/toast', () => ({ toast: {} }))
 
 class MockSocket {
   static OPEN = 1

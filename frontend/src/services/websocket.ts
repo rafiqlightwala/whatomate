@@ -4,7 +4,7 @@ import { useCallingStore } from '@/stores/calling'
 import { useAuthStore } from '@/stores/auth'
 import { useNotesStore } from '@/stores/notes'
 import { contactsService } from '@/services/api'
-import { toast } from 'vue-sonner'
+import { toast } from '@/lib/toast'
 import router from '@/router'
 
 // Notification sound
@@ -30,12 +30,6 @@ function showNotification(title: string, body: string, contactId: string) {
       label: 'View',
       onClick: () => {
         router.push(`/chat/${contactId}`)
-      },
-      actionButtonStyle: {
-        background: 'transparent',
-        border: '1px solid #e5e7eb',
-        color: '#3b82f6',
-        fontWeight: '500'
       }
     }
   })
@@ -548,8 +542,9 @@ class WebSocketService {
     const callingStore = useCallingStore()
     callingStore.handleCallEvent('call_transfer_waiting', payload)
 
+    // No one-shot beep here — the calling store rings a looping tone for as
+    // long as the transfer is waiting.
     const contactName = payload.caller_phone || 'Unknown'
-    playNotificationSound()
     toast.info('Incoming Call Transfer', {
       description: `Call from ${contactName} waiting for an agent`,
       duration: 10000,
