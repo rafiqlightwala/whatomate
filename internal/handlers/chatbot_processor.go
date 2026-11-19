@@ -1277,6 +1277,27 @@ func (a *App) generateAIResponse(settings *models.ChatbotSettings, session *mode
 	}
 }
 
+// openAIReasoningModel matches OpenAI chat models from the GPT-5 generation on (gpt-5*, gpt-6*, ...)
+// and the o-series. They reject max_tokens and any temperature other than the default.
+var openAIReasoningModel = regexp.MustCompile(`^(gpt-([5-9]|[1-9][0-9])|o[0-9])`)
+
+// applyOpenAILimits sets the output limit and sampling options a Chat Completions request needs
+// for the given model: max_completion_tokens plus reasoning_effort for reasoning models,
+// max_tokens plus temperature for older ones.
+func applyOpenAILimits(payload map[string]any, model string, maxTokens int, temperature float64, reasoningEffort string) {
+	if openAIReasoningModel.MatchString(strings.ToLower(strings.TrimSpace(model))) {
+		payload["max_completion_tokens"] = maxTokens
+		if reasoningEffort != "" {
+			payload["reasoning_effort"] = reasoningEffort
+		}
+		return
+	}
+	payload["max_tokens"] = maxTokens
+	if temperature > 0 {
+		payload["temperature"] = temperature
+	}
+}
+
 func resolveAIModel(provider models.AIProvider, configuredModel string) string {
 	if configuredModel != "" {
 		return configuredModel
@@ -1430,14 +1451,10 @@ func (a *App) generateOpenAIResponse(settings *models.ChatbotSettings, session *
 	})
 
 	payload := map[string]any{
-		"model":      settings.AI.Model,
-		"messages":   messages,
-		"max_tokens": settings.AI.MaxTokens,
+		"model":    settings.AI.Model,
+		"messages": messages,
 	}
-
-	if settings.AI.Temperature > 0 {
-		payload["temperature"] = settings.AI.Temperature
-	}
+	applyOpenAILimits(payload, settings.AI.Model, settings.AI.MaxTokens, settings.AI.Temperature, "none")
 
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {

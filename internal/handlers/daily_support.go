@@ -548,7 +548,8 @@ func (a *App) supportGenerator(settings *models.ChatbotSettings) support.Generat
 		if settings.AI.Provider != models.AIProviderOpenAI {
 			return "", errors.New("consolidated support currently requires the configured OpenAI provider")
 		}
-		payload := map[string]any{"model": settings.AI.Model, "max_tokens": 4000, "temperature": 0.2, "messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": input}}}
+		payload := map[string]any{"model": settings.AI.Model, "messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": input}}}
+		applyOpenAILimits(payload, settings.AI.Model, 4000, 0.2, "low")
 		if system == builtin.InvestifyQueuePrompt {
 			payload["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "support_decision", "strict": true, "schema": json.RawMessage(`{
 "type":"object","additionalProperties":false,"required":["decision","reason","language","summary","questions"],"properties":{
