@@ -83,7 +83,7 @@ Prices refresh automatically about every minute while the app is open; pull down
 - Dividends: "+" → "Add a Dividend". Bonus shares: "+" → "Add Bonus Shares". Stock split: "+" → "Add a Stock Split".
 - Edit or delete: pencil/Edit on the Portfolio tab, or open a holding and edit a transaction.
 - Average buy price includes commission. History shows the last 365 days.
-- No automatic import from a broker, and no CSV/Excel export, at the moment. Trades are entered manually.
+- Importing trades is coming soon: automatic imports and imports from PDF statements are being worked on and are expected in the near future (no exact date; do not promise one). Until then, trades are entered manually. CSV/Excel export is not available yet.
 - For a calculation that looks wrong, the customer should email the symbol, each transaction's shares, price and date, and what they expected.
 
 ## 10. Watchlist
@@ -125,7 +125,7 @@ Real buying and selling of shares needs an account with a PSX-licensed broker (a
 
 ## 16. Feedback and feature requests
 
-Thank the customer for the specific idea. Do not promise a feature or a date, and do not claim the request was logged, forwarded or assigned. Known: more than one portfolio is planned (no date); price alerts and broker import are not available now.
+Thank the customer for the specific idea. Do not promise a feature or a date, and do not claim the request was logged, forwarded or assigned. Known: automatic and PDF trade imports are being worked on and coming soon (no exact date); more than one portfolio is planned (no date); price alerts and CSV/Excel export are not available now.
 
 ## 17. Contact
 

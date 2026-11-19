@@ -24,7 +24,7 @@ var InvestifyQueuePrompt string
 var InvestifyAnswerPrompt string
 
 // InvestifySupportVersion identifies the knowledge and prompts used for a decision.
-const InvestifySupportVersion = "2026-11-19.1"
+const InvestifySupportVersion = "2026-11-19.2"
 
 type InvestifyReplies map[string]map[string]string
 
