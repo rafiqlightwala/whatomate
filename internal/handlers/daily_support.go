@@ -180,14 +180,105 @@ func budgetUsage(db *gorm.DB, _ uuid.UUID, phone string, start time.Time) (int64
 	return count, err
 }
 
-func customerSuppressed(db *gorm.DB, org, contact uuid.UUID, now time.Time) (bool, error) {
-	var count int64
-	err := db.Unscoped().Model(&models.Message{}).Where("organization_id=? AND contact_id=? AND direction='outgoing' AND created_at>=? AND status <> 'failed'", org, contact, customerStart(now)).Count(&count).Error
-	if err != nil || count > 0 {
-		return count > 0, err
+// customerReplies reports how many automated replies the customer has had this PKT month and
+// whether anything else (a manual reply, or an outgoing message outside the support ledger)
+// holds automation for the rest of the month.
+type customerReplies struct {
+	Automatic int
+	Held      bool
+}
+
+func (c customerReplies) blockedReason() string {
+	switch {
+	case c.Held:
+		return "Manual reply holds automation for this month"
+	case c.Automatic >= support.MaxAutomaticReplies:
+		return "Customer already had both automated replies this month"
 	}
-	err = db.Model(&models.SupportSend{}).Where("organization_id=? AND contact_id=? AND customer_month=? AND state <> 'rejected'", org, contact, support.CustomerMonth(now)).Count(&count).Error
-	return count > 0, err
+	return ""
+}
+
+// isFollowUp is true when the next automated reply would be the customer's second this month.
+func (c customerReplies) isFollowUp() bool { return c.Automatic == 1 }
+
+func customerReplyStatus(db *gorm.DB, org, contact uuid.UUID, now time.Time) (customerReplies, error) {
+	var out customerReplies
+	var automatic, outgoing int64
+	if err := db.Model(&models.SupportSend{}).Where("organization_id=? AND contact_id=? AND customer_month=? AND automatic AND state <> 'rejected'", org, contact, support.CustomerMonth(now)).Count(&automatic).Error; err != nil {
+		return out, err
+	}
+	if err := db.Unscoped().Model(&models.Message{}).Where("organization_id=? AND contact_id=? AND direction='outgoing' AND created_at>=? AND status <> 'failed'", org, contact, customerStart(now)).Count(&outgoing).Error; err != nil {
+		return out, err
+	}
+	var manual int64
+	if err := db.Model(&models.SupportSend{}).Where("organization_id=? AND contact_id=? AND customer_month=? AND NOT automatic AND state <> 'rejected'", org, contact, support.CustomerMonth(now)).Count(&manual).Error; err != nil {
+		return out, err
+	}
+	var unsettled int64
+	if err := db.Model(&models.SupportSend{}).Where("organization_id=? AND contact_id=? AND customer_month=? AND automatic AND state IN ('reserved','uncertain')", org, contact, support.CustomerMonth(now)).Count(&unsettled).Error; err != nil {
+		return out, err
+	}
+	out.Automatic = int(automatic)
+	// Any outgoing message beyond the automatic ledger (a manual reply, or a send from before
+	// the ledger existed) keeps automation off for the month, as before. An automatic reply whose
+	// outcome is still unknown also holds: a second reply could duplicate it.
+	out.Held = manual > 0 || outgoing > automatic || unsettled > 0
+	return out, nil
+}
+
+// supportPacing measures the number's month and asks the calculator whether one more second
+// reply is affordable. Baseline demand counts first automatic replies and manual sends only.
+func supportPacing(db *gorm.DB, phone string, zone string, now time.Time) (support.PacingDecision, error) {
+	start, err := billingStart(now, zone)
+	if err != nil {
+		return support.PacingDecision{}, err
+	}
+	used, err := budgetUsage(db, uuid.Nil, phone, start)
+	if err != nil {
+		return support.PacingDecision{}, err
+	}
+	loc := start.Location()
+	today := time.Date(now.In(loc).Year(), now.In(loc).Month(), now.In(loc).Day(), 0, 0, 0, 0, loc)
+	historyStart := today.AddDate(0, 0, -7)
+	prevStart := start.AddDate(0, -1, 0)
+
+	type dayCount struct {
+		Day   time.Time
+		Count int
+	}
+	var rows []dayCount
+	if err := db.Raw(`SELECT date_trunc('day', created_at AT TIME ZONE ?) AS day, count(*) AS count
+ FROM support_sends WHERE phone_id=? AND created_at>=? AND state <> 'rejected' AND (NOT automatic OR sequence <= 1)
+ GROUP BY 1`, loc.String(), phone, historyStart).Scan(&rows).Error; err != nil {
+		return support.PacingDecision{}, err
+	}
+	byDay := map[string]int{}
+	for _, r := range rows {
+		byDay[r.Day.Format("2006-01-02")] = r.Count
+	}
+	daily := make([]int, 0, 8)
+	for d := historyStart; !d.After(today); d = d.AddDate(0, 0, 1) {
+		daily = append(daily, byDay[d.Format("2006-01-02")])
+	}
+	var mtd, prev, secondsToday int64
+	baseline := "phone_id=? AND state <> 'rejected' AND (NOT automatic OR sequence <= 1)"
+	if err := db.Model(&models.SupportSend{}).Where(baseline+" AND created_at>=?", phone, start).Count(&mtd).Error; err != nil {
+		return support.PacingDecision{}, err
+	}
+	if err := db.Model(&models.SupportSend{}).Where(baseline+" AND created_at>=? AND created_at<?", phone, prevStart, start).Count(&prev).Error; err != nil {
+		return support.PacingDecision{}, err
+	}
+	if err := db.Model(&models.SupportSend{}).Where("phone_id=? AND automatic AND sequence=2 AND state <> 'rejected' AND created_at>=?", phone, today).Count(&secondsToday).Error; err != nil {
+		return support.PacingDecision{}, err
+	}
+	prevDays := start.Sub(prevStart).Hours() / 24
+	return support.SecondReplyPacing(support.PacingInput{
+		Now: now, MonthStart: start, MonthEnd: start.AddDate(0, 1, 0),
+		Limit: support.MonthlyLimit, Used: int(used),
+		BaselineDaily: daily, BaselineMonthToDate: int(mtd),
+		PreviousMonthDailyAverage: float64(prev) / prevDays,
+		SecondRepliesToday:        int(secondsToday),
+	}), nil
 }
 
 // reserveSupportSend atomically creates the message and its reservation. The
@@ -220,6 +311,7 @@ func (a *App) reserveSupportSend(req OutgoingMessageRequest, opts MessageSendOpt
 			return errors.New("templates and flows are disabled in consolidated support mode")
 		}
 		automatic := opts.supportJobID != uuid.Nil
+		sequence := 0 // manual sends; automatic sends set 1 or 2 below
 		if !automatic && opts.SentByUserID == nil {
 			return errors.New("legacy automation is disabled in consolidated support mode")
 		}
@@ -260,13 +352,24 @@ func (a *App) reserveSupportSend(req OutgoingMessageRequest, opts MessageSendOpt
 			if contact.AssignedUserID != nil || transfers > 0 {
 				return errors.New("conversation is assigned to a human")
 			}
-			blocked, err := customerSuppressed(tx, req.Account.OrganizationID, req.Contact.ID, now)
+			replies, err := customerReplyStatus(tx, req.Account.OrganizationID, req.Contact.ID, now)
 			if err != nil {
 				return err
 			}
-			if blocked {
-				return errors.New("customer already replied to this month")
+			if reason := replies.blockedReason(); reason != "" {
+				return errors.New(reason)
 			}
+			if replies.isFollowUp() {
+				// The number lock is held, so this decision and the reservation below are atomic.
+				pacing, err := supportPacing(tx, req.Account.PhoneID, policy.BillingTimezone, now)
+				if err != nil {
+					return err
+				}
+				if !pacing.Allowed {
+					return errors.New(pacing.Reason)
+				}
+			}
+			sequence = replies.Automatic + 1
 		} else {
 			var pending int64
 			if err := tx.Model(&models.SupportSend{}).Where("organization_id=? AND contact_id=? AND state='reserved'", req.Account.OrganizationID, req.Contact.ID).Count(&pending).Error; err != nil {
@@ -290,7 +393,7 @@ func (a *App) reserveSupportSend(req OutgoingMessageRequest, opts MessageSendOpt
 		if err := tx.Create(msg).Error; err != nil {
 			return err
 		}
-		reservation := models.SupportSend{BaseModel: models.BaseModel{ID: uuid.New()}, OrganizationID: req.Account.OrganizationID, PhoneID: req.Account.PhoneID, ContactID: req.Contact.ID, MessageID: msg.ID, CustomerMonth: support.CustomerMonth(now), Automatic: automatic, State: "reserved"}
+		reservation := models.SupportSend{BaseModel: models.BaseModel{ID: uuid.New()}, OrganizationID: req.Account.OrganizationID, PhoneID: req.Account.PhoneID, ContactID: req.Contact.ID, MessageID: msg.ID, CustomerMonth: support.CustomerMonth(now), Automatic: automatic, Sequence: sequence, State: "reserved"}
 		if automatic {
 			reservation.JobID = &job.ID
 			if err := tx.Model(&job).Update("state", "sending").Error; err != nil {
@@ -432,13 +535,13 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 	if job.DueAt.After(now) {
 		eligibilityTime = job.DueAt
 	}
-	blocked, err := customerSuppressed(a.DB, job.OrganizationID, job.ContactID, eligibilityTime)
+	replies, err := customerReplyStatus(a.DB, job.OrganizationID, job.ContactID, eligibilityTime)
 	if err != nil {
 		a.supportJobUpdate(job, map[string]any{"state": "error", "retry_at": now.Add(time.Minute), "reason": "Eligibility lookup failed"})
 		return
 	}
-	if blocked {
-		a.supportJobUpdate(job, map[string]any{"state": "suppressed", "reason": "Customer already replied to or send outcome held this month"})
+	if reason := replies.blockedReason(); reason != "" {
+		a.supportJobUpdate(job, map[string]any{"state": "suppressed", "reason": reason})
 		return
 	}
 	var contact models.Contact
@@ -454,6 +557,18 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 		return
 	}
 	account.DecryptSecrets(a.Config.App.EncryptionKey)
+	if replies.isFollowUp() {
+		// Check affordability before spending AI tokens; the send path checks again under lock.
+		pacing, err := supportPacing(a.DB, account.PhoneID, policy.BillingTimezone, now)
+		if err != nil {
+			a.supportJobUpdate(job, map[string]any{"state": "error", "retry_at": now.Add(time.Minute), "reason": "Quota pacing lookup failed"})
+			return
+		}
+		if !pacing.Allowed {
+			a.supportJobUpdate(job, map[string]any{"state": "suppressed", "reason": pacing.Reason})
+			return
+		}
+	}
 	settings, err := a.getChatbotSettingsCached(job.OrganizationID, job.Account)
 	if err != nil || !settings.IsEnabled || !settings.AI.Enabled {
 		a.supportJobUpdate(job, map[string]any{"state": "error", "reason": "Chatbot or AI is disabled", "retry_at": now.Add(time.Minute)})
@@ -470,7 +585,7 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 			return
 		}
 		prepCtx, cancel := context.WithTimeout(ctx, 75*time.Second)
-		prepared, err := support.Prepare(prepCtx, transcript, a.supportGenerator(settings))
+		prepared, err := support.Prepare(prepCtx, transcript, a.supportGenerator(settings), support.Options{FollowUp: replies.isFollowUp()})
 		cancel()
 		if err != nil {
 			a.supportJobUpdate(job, map[string]any{"state": "error", "reason": "AI preparation unavailable; automatic retry scheduled", "attempts": job.Attempts + 1, "retry_at": now.Add(supportPreparationBackoff(job.Attempts))})
@@ -479,11 +594,16 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 		}
 		decision, _ := json.Marshal(prepared.Decision)
 		state := "ready"
+		reason := prepared.Reason
 		if prepared.Decision.Decision == "skip" {
 			state = "skipped"
+		} else if replies.isFollowUp() && (prepared.Decision.Decision != "answer" || prepared.Fallback) {
+			// A second reply is only worth the quota when it actually answers something new.
+			state = "suppressed"
+			reason = "Follow-up not answerable over WhatsApp; second reply not spent"
 		}
 		body := support.CleanEmailHandoff(prepared.Body)
-		a.supportJobUpdate(job, map[string]any{"state": state, "attempts": 0, "decision": string(decision), "answer": body, "version": prepared.Version, "reason": prepared.Reason, "retry_at": now})
+		a.supportJobUpdate(job, map[string]any{"state": state, "attempts": 0, "decision": string(decision), "answer": body, "version": prepared.Version, "reason": reason, "retry_at": now})
 		return // The next tick rechecks revision and manual takeover before dispatch.
 	}
 	if policy.Paused {
@@ -522,13 +642,31 @@ func (a *App) processSupportJob(ctx context.Context, policy models.SupportPolicy
 	}
 }
 
+// supportTranscript returns this month's conversation so a follow-up can see the earlier
+// question and the reply already sent. Only incoming messages from PendingFrom on are pending;
+// earlier ones are context and can never justify new work. If the month is too long, it falls
+// back to the pending messages alone.
 func (a *App) supportTranscript(job models.SupportJob) ([]support.Message, error) {
-	var messages []models.Message
-	if err := a.DB.Where("organization_id=? AND contact_id=? AND whats_app_account=? AND created_at>=?", job.OrganizationID, job.ContactID, job.Account, job.PendingFrom).Order("created_at ASC, id ASC").Limit(201).Find(&messages).Error; err != nil {
+	from := customerStart(job.PendingFrom)
+	if job.PendingFrom.Before(from) {
+		from = job.PendingFrom
+	}
+	load := func(since time.Time) ([]models.Message, error) {
+		var messages []models.Message
+		err := a.DB.Where("organization_id=? AND contact_id=? AND whats_app_account=? AND created_at>=?", job.OrganizationID, job.ContactID, job.Account, since).Order("created_at ASC, id ASC").Limit(201).Find(&messages).Error
+		return messages, err
+	}
+	messages, err := load(from)
+	if err != nil {
 		return nil, err
 	}
 	if len(messages) > 200 {
-		return nil, errors.New("Conversation exceeds preparation size; email fallback required")
+		if messages, err = load(job.PendingFrom); err != nil {
+			return nil, err
+		}
+		if len(messages) > 200 {
+			return nil, errors.New("Conversation exceeds preparation size; email fallback required")
+		}
 	}
 	transcript := make([]support.Message, 0, len(messages))
 	for _, m := range messages {
@@ -536,7 +674,8 @@ func (a *App) supportTranscript(job models.SupportJob) ([]support.Message, error
 		if m.MessageType != models.MessageTypeText {
 			media = string(m.MessageType)
 		}
-		transcript = append(transcript, support.Message{ID: m.ID.String(), Direction: string(m.Direction), Text: m.Content, Media: media, Pending: m.Direction == models.DirectionIncoming})
+		pending := m.Direction == models.DirectionIncoming && !m.CreatedAt.Before(job.PendingFrom)
+		transcript = append(transcript, support.Message{ID: m.ID.String(), Direction: string(m.Direction), Text: m.Content, Media: media, Pending: pending})
 	}
 	return transcript, nil
 }
@@ -652,7 +791,13 @@ func (a *App) GetSupportQueue(r *fastglue.Request) error {
 		if err != nil {
 			return r.SendErrorEnvelope(500, "Cannot load message budget", nil, "")
 		}
-		budgets = append(budgets, map[string]any{"account": account.Name, "used": used, "limit": support.MonthlyLimit, "resets_at": start.AddDate(0, 1, 0)})
+		pacing, err := supportPacing(a.DB, account.PhoneID, policy.BillingTimezone, time.Now())
+		if err != nil {
+			return r.SendErrorEnvelope(500, "Cannot load reply pacing", nil, "")
+		}
+		var secondsThisMonth int64
+		a.DB.Model(&models.SupportSend{}).Where("phone_id=? AND automatic AND sequence=2 AND state <> 'rejected' AND created_at>=?", account.PhoneID, start).Count(&secondsThisMonth)
+		budgets = append(budgets, map[string]any{"account": account.Name, "used": used, "limit": support.MonthlyLimit, "resets_at": start.AddDate(0, 1, 0), "pacing": pacing, "second_replies": secondsThisMonth})
 	}
 	var monthly []struct {
 		Month             string `json:"month"`
@@ -762,19 +907,30 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 	if err := json.Unmarshal(r.RequestCtx.PostBody(), &input); err != nil {
 		return r.SendErrorEnvelope(400, "Invalid case", nil, "")
 	}
-	cases := map[string]struct {
+	// Each case checks the classification and, where it matters, the reply itself: AnyOf needs at
+	// least one of the phrases (case-insensitive), NoneOf none of them.
+	type check struct {
 		Texts     []string
+		Earlier   []string // an earlier Investify reply this month (makes it a follow-up)
 		Decision  string
 		Questions int
-	}{
-		"greeting":        {[]string{"AOA"}, "skip", 0},
-		"boilerplate":     {[]string{"My Investify user email is demo@example.test and I have the following issues or feedback about the iOS App:"}, "skip", 0},
-		"feature_request": {[]string{"Please add custom stock price alerts, for example notify me when OGDC crosses a price I choose."}, "answer", 1},
-		"vague_issue":     {[]string{"Hey", "Why your app is not working"}, "email", 1},
-		"login":           {[]string{"I'm having issues logging in"}, "answer", 1},
-		"combined":        {[]string{"I forgot my password. I already checked spam for the reset email.", "Can I use my portfolio on my laptop?", "Thanks"}, "answer", 2},
-		"resolved":        {[]string{"I cannot log in", "It is fixed now, I signed in successfully. No help needed, thanks."}, "skip", 0},
-		"roman_urdu":      {[]string{"AOA, login nahi ho raha. Laptop par bhi Investify use kar sakta hoon?"}, "answer", 2},
+		Language  string
+		AnyOf     []string
+		NoneOf    []string
+	}
+	cases := map[string]check{
+		"greeting":          {Texts: []string{"AOA"}, Decision: "skip"},
+		"boilerplate":       {Texts: []string{"My Investify user email is demo@example.test and I have the following issues or feedback about the iOS App:"}, Decision: "skip"},
+		"auto_reply":        {Texts: []string{"Thank you for your message. We're unavailable right now, but will respond as soon as possible."}, Decision: "skip"},
+		"feature_request":   {Texts: []string{"Please add custom stock price alerts, for example notify me when OGDC crosses a price I choose."}, Decision: "answer", Questions: 1, NoneOf: []string{"browser notification", "you can set a price alert", "forwarded"}},
+		"vague_issue":       {Texts: []string{"Hey", "Why your app is not working"}, Decision: "email", Questions: 1},
+		"login":             {Texts: []string{"I'm having issues logging in"}, Decision: "answer", Questions: 1, AnyOf: []string{"forgot password"}, NoneOf: []string{"to resolve your login issue"}},
+		"signup":            {Texts: []string{"I'm having issues creating an account"}, Decision: "answer", Questions: 1, AnyOf: []string{"continue with google"}},
+		"portfolio_loading": {Texts: []string{"My Investify user email is demo@example.test and I have the following issues or feedback: my watchlist and portfolio keep loading and never show"}, Decision: "answer", Questions: 1, AnyOf: []string{"log out", "logout"}},
+		"combined":          {Texts: []string{"I forgot my password. I already checked spam for the reset email.", "Can I use my portfolio on my laptop?", "Thanks"}, Decision: "answer", Questions: 2},
+		"resolved":          {Texts: []string{"I cannot log in", "It is fixed now, I signed in successfully. No help needed, thanks."}, Decision: "skip"},
+		"roman_urdu":        {Texts: []string{"AOA, login nahi ho raha. Laptop par bhi Investify use kar sakta hoon?"}, Decision: "answer", Questions: 2, Language: "roman_ur"},
+		"follow_up":         {Earlier: []string{"Tap the gear icon, then Settings, then \"Log Out\", and sign in again with the same account."}, Texts: []string{"I logged out and in but the portfolio is still empty"}, Decision: "answer", Questions: 1, AnyOf: []string{"reinstall", "uninstall", "same account", "different account", "different email"}},
 	}
 	fixture, ok := cases[input.Case]
 	if !ok {
@@ -785,23 +941,33 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(400, "AI settings unavailable", nil, "")
 	}
 	var transcript []support.Message
+	for i, text := range fixture.Earlier {
+		transcript = append(transcript, support.Message{ID: "earlier-" + strconv.Itoa(i+1), Direction: "outgoing", Text: text})
+	}
 	for i, text := range fixture.Texts {
 		transcript = append(transcript, support.Message{ID: strconv.Itoa(i + 1), Direction: "incoming", Pending: true, Text: text})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	prepared, err := support.Prepare(ctx, transcript, a.supportGenerator(settings))
+	prepared, err := support.Prepare(ctx, transcript, a.supportGenerator(settings), support.Options{FollowUp: len(fixture.Earlier) > 0})
 	if err != nil {
 		return r.SendErrorEnvelope(502, "AI regression check failed: "+err.Error(), nil, "")
 	}
-	expectedLanguage := "en"
-	if input.Case == "roman_urdu" {
-		expectedLanguage = "roman_ur"
+	expectedLanguage := fixture.Language
+	if expectedLanguage == "" {
+		expectedLanguage = "en"
 	}
 	passed := prepared.Decision.Decision == fixture.Decision && len(prepared.Questions) == fixture.Questions && prepared.Language == expectedLanguage && !prepared.Fallback
-	if input.Case == "feature_request" {
-		body := strings.ToLower(prepared.Body)
-		passed = passed && !strings.Contains(body, "does not have") && !strings.Contains(body, "not available") && !strings.Contains(body, "browser notifications")
+	body := strings.ToLower(prepared.Body)
+	if len(fixture.AnyOf) > 0 {
+		found := false
+		for _, phrase := range fixture.AnyOf {
+			found = found || strings.Contains(body, phrase)
+		}
+		passed = passed && found
+	}
+	for _, phrase := range fixture.NoneOf {
+		passed = passed && !strings.Contains(body, phrase)
 	}
 	return r.SendEnvelope(map[string]any{"case": input.Case, "passed": passed, "prepared": prepared})
 }

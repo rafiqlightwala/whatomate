@@ -52,6 +52,9 @@ type SupportSend struct {
 	JobID          *uuid.UUID `gorm:"type:uuid" json:"job_id"`
 	CustomerMonth  string     `gorm:"index" json:"customer_month"`
 	Automatic      bool       `json:"automatic"`
-	State          string     `gorm:"index" json:"state"`
-	WAMID          string     `gorm:"column:wamid" json:"wamid"`
+	// Sequence is the automatic reply's position in the customer's month (1 or 2); 0 for manual
+	// sends. Existing rows predate second replies and default to 1.
+	Sequence int    `gorm:"not null;default:1" json:"sequence"`
+	State    string `gorm:"index" json:"state"`
+	WAMID    string `gorm:"column:wamid" json:"wamid"`
 }

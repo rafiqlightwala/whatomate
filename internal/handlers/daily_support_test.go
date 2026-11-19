@@ -102,9 +102,10 @@ func TestSupportManualRejectionRestoresEligibility(t *testing.T) {
 	require.NoError(t, err)
 	a.DB.Model(msg).Update("status", models.MessageStatusFailed)
 	a.finishSupportSend(msg, "", &whatsapp.RequestError{StatusCode: 400, Message: "rejected"})
-	blocked, err := customerSuppressed(a.DB, account.OrganizationID, contact.ID, time.Now())
+	replies, err := customerReplyStatus(a.DB, account.OrganizationID, contact.ID, time.Now())
 	require.NoError(t, err)
-	require.False(t, blocked)
+	require.Empty(t, replies.blockedReason())
+	require.Zero(t, replies.Automatic)
 	start, _ := billingStart(time.Now(), "Asia/Karachi")
 	used, err := budgetUsage(a.DB, account.OrganizationID, account.PhoneID, start)
 	require.NoError(t, err)
@@ -122,9 +123,9 @@ func TestSupportUnknownOutcomeDoesNotReleaseBudget(t *testing.T) {
 	require.NoError(t, err)
 	a.DB.Model(msg).Update("status", models.MessageStatusFailed)
 	a.finishSupportSend(msg, "", errors.New("connection lost"))
-	blocked, err := customerSuppressed(a.DB, account.OrganizationID, contact.ID, time.Now())
+	replies, err := customerReplyStatus(a.DB, account.OrganizationID, contact.ID, time.Now())
 	require.NoError(t, err)
-	require.True(t, blocked)
+	require.True(t, replies.Held, "an unknown outcome must hold any follow-up reply")
 	start, _ := billingStart(time.Now(), "Asia/Karachi")
 	used, err := budgetUsage(a.DB, account.OrganizationID, account.PhoneID, start)
 	require.NoError(t, err)
@@ -319,4 +320,124 @@ func TestSupportOnlyAutomaticRejectionsExhaustSendAttempts(t *testing.T) {
 	var sends int64
 	require.NoError(t, a.DB.Model(&models.SupportSend{}).Where("job_id=?", job.ID).Count(&sends).Error)
 	require.EqualValues(t, 3, sends)
+}
+
+// acceptedAutomaticReply records an automatic reply already delivered to the customer this month.
+func acceptedAutomaticReply(t *testing.T, a *App, account *models.WhatsAppAccount, contact *models.Contact, sequence int) {
+	t.Helper()
+	msg := models.Message{OrganizationID: account.OrganizationID, WhatsAppAccount: account.Name, ContactID: contact.ID, Direction: models.DirectionOutgoing, MessageType: models.MessageTypeText, Status: models.MessageStatusSent, Content: "Earlier automated reply"}
+	require.NoError(t, a.DB.Create(&msg).Error)
+	require.NoError(t, a.DB.Create(&models.SupportSend{OrganizationID: account.OrganizationID, PhoneID: account.PhoneID, ContactID: contact.ID, MessageID: msg.ID, CustomerMonth: support.CustomerMonth(time.Now()), Automatic: true, Sequence: sequence, State: "accepted"}).Error)
+}
+
+// followUpJob turns the setup job into a pending follow-up with one new customer message, and
+// fakes the AI provider: the classifier returns decision, the writer a short answer.
+func followUpJob(t *testing.T, a *App, account *models.WhatsAppAccount, contact *models.Contact, job *models.SupportJob, decision string) *int {
+	t.Helper()
+	msg := models.Message{OrganizationID: account.OrganizationID, WhatsAppAccount: account.Name, ContactID: contact.ID, Direction: models.DirectionIncoming, MessageType: models.MessageTypeText, Content: "Still not loading after logging out and in"}
+	require.NoError(t, a.DB.Create(&msg).Error)
+	require.NoError(t, a.DB.Model(job).Updates(map[string]any{"state": "pending", "answer": "", "pending_from": msg.CreatedAt}).Error)
+	require.NoError(t, a.DB.Create(&models.ChatbotSettings{OrganizationID: account.OrganizationID, IsEnabled: true, AI: models.AIConfig{Enabled: true, Provider: models.AIProviderOpenAI, APIKey: "test-only", Model: "gpt-6-luna"}}).Error)
+	calls := 0
+	a.HTTPClient = &http.Client{Transport: supportTransport(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(r.URL.Host, "openai") {
+			// The WhatsApp send itself.
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"messages":[{"id":"wamid.test"}]}`)), Header: make(http.Header)}, nil
+		}
+		calls++
+		require.NotContains(t, string(body), `"max_tokens"`, "reasoning models must get max_completion_tokens")
+		answer := "Uninstall the app, reinstall it from the store, then sign in with the same email."
+		if calls == 1 {
+			d := support.Decision{Decision: decision, Reason: "Follow-up", Language: "en", Summary: "Still not loading", Questions: []support.Question{}}
+			if decision != "skip" {
+				d.Questions = []support.Question{{Category: "portfolio", Question: "Portfolio still not loading", MessageIDs: []string{msg.ID.String()}, AttemptedSteps: []string{"logged out and in"}}}
+			}
+			b, _ := json.Marshal(d)
+			answer = string(b)
+		} else {
+			require.Contains(t, string(body), `\"reply_kind\":\"follow_up\"`, "the writer must know this is the second reply")
+		}
+		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": answer}, "finish_reason": "stop"}}})
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(b))), Header: make(http.Header)}, nil
+	})}
+	return &calls
+}
+
+func TestSupportSecondReplySentWhenQuotaIsSpare(t *testing.T) {
+	a, account, contact, job := supportTestSetup(t)
+	acceptedAutomaticReply(t, a, account, contact, 1)
+	followUpJob(t, a, account, contact, &job, "answer")
+	policy, _ := supportPolicy(a.DB, account.OrganizationID)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	a.processSupportJob(context.Background(), policy, job)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	require.Equal(t, "ready", job.State, job.Reason)
+	require.Contains(t, job.Answer, "last automated reply this month")
+	a.processSupportJob(context.Background(), policy, job)
+	var second models.SupportSend
+	require.NoError(t, a.DB.Where("contact_id=? AND automatic AND sequence=2", contact.ID).First(&second).Error)
+	// A third reply is never sent, whatever the quota.
+	followUpJob(t, a, account, contact, &job, "answer")
+	require.NoError(t, a.DB.Model(&models.SupportSend{}).Where("id=?", second.ID).Update("state", "accepted").Error)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	a.processSupportJob(context.Background(), policy, job)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	require.Equal(t, "suppressed", job.State)
+	require.Contains(t, job.Reason, "both automated replies")
+}
+
+func TestSupportSecondReplyHeldWhenQuotaIsTight(t *testing.T) {
+	a, account, contact, job := supportTestSetup(t)
+	acceptedAutomaticReply(t, a, account, contact, 1)
+	// A surge today: 120 first replies to other customers on top of 800 earlier sends.
+	elsewhere := testutil.CreateTestContact(t, a.DB, account.OrganizationID)
+	historical := make([]models.Message, 800)
+	for i := range historical {
+		historical[i] = models.Message{OrganizationID: account.OrganizationID, WhatsAppAccount: account.Name, ContactID: elsewhere.ID, Direction: models.DirectionOutgoing, MessageType: models.MessageTypeText, Status: models.MessageStatusSent}
+	}
+	require.NoError(t, a.DB.CreateInBatches(historical, 200).Error)
+	for i := 0; i < 120; i++ {
+		other := testutil.CreateTestContact(t, a.DB, account.OrganizationID)
+		acceptedAutomaticReply(t, a, account, other, 1)
+	}
+	calls := followUpJob(t, a, account, contact, &job, "answer")
+	policy, _ := supportPolicy(a.DB, account.OrganizationID)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	a.processSupportJob(context.Background(), policy, job)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	require.Equal(t, "suppressed", job.State)
+	require.Contains(t, job.Reason, "Second reply held")
+	require.Zero(t, *calls, "no AI tokens are spent on a follow-up that cannot be afforded")
+}
+
+func TestSupportFollowUpNotSpentOnEmailOnlyAnswer(t *testing.T) {
+	a, account, contact, job := supportTestSetup(t)
+	acceptedAutomaticReply(t, a, account, contact, 1)
+	followUpJob(t, a, account, contact, &job, "email")
+	policy, _ := supportPolicy(a.DB, account.OrganizationID)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	a.processSupportJob(context.Background(), policy, job)
+	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
+	require.Equal(t, "suppressed", job.State)
+	var autos int64
+	require.NoError(t, a.DB.Model(&models.SupportSend{}).Where("contact_id=? AND automatic", contact.ID).Count(&autos).Error)
+	require.EqualValues(t, 1, autos)
+}
+
+func TestSupportManualReplyHoldsFollowUps(t *testing.T) {
+	a, account, contact, job := supportTestSetup(t)
+	user := testutil.CreateTestUser(t, a.DB, account.OrganizationID)
+	opts := DefaultSendOptions()
+	opts.SentByUserID = &user.ID
+	req := OutgoingMessageRequest{Account: account, Contact: contact, Type: models.MessageTypeText, Content: "manual"}
+	msg := a.createOutgoingMessage(req, opts)
+	_, err := a.reserveSupportSend(req, opts, msg)
+	require.NoError(t, err)
+	a.finishSupportSend(msg, "wamid.test", nil)
+	replies, err := customerReplyStatus(a.DB, account.OrganizationID, contact.ID, time.Now())
+	require.NoError(t, err)
+	require.True(t, replies.Held)
+	require.Equal(t, "Manual reply holds automation for this month", replies.blockedReason())
+	_ = job
 }

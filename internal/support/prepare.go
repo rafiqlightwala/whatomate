@@ -46,10 +46,21 @@ type Prepared struct {
 	Fallback bool   `json:"fallback"`
 }
 
+// Options adjusts preparation for the customer's situation this month.
+type Options struct {
+	// FollowUp marks the customer's second (and final) automated reply this month: the earlier
+	// reply is in the transcript and the answer must build on it rather than repeat it.
+	FollowUp bool
+}
+
 // Prepare classifies first, then writes one reply from approved product facts.
 // It cannot reserve budget or send. The worker must validate the conversation
 // revision, manual suppression and service window again after this returns.
-func Prepare(ctx context.Context, messages []Message, generate Generate) (Prepared, error) {
+func Prepare(ctx context.Context, messages []Message, generate Generate, opts ...Options) (Prepared, error) {
+	var opt Options
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	result := Prepared{Version: builtin.InvestifySupportVersion}
 	if err := validateMessages(messages); err != nil {
 		return result, err
@@ -84,14 +95,19 @@ func Prepare(ctx context.Context, messages []Message, generate Generate) (Prepar
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	replyKind := "first"
+	if opt.FollowUp {
+		replyKind = "follow_up"
+	}
 	answerInput, err := json.Marshal(struct {
-		Decision Decision  `json:"classification"`
-		Messages []Message `json:"messages"`
-	}{result.Decision, messages})
+		ReplyKind string    `json:"reply_kind"`
+		Decision  Decision  `json:"classification"`
+		Messages  []Message `json:"messages"`
+	}{replyKind, result.Decision, messages})
 	if err != nil {
 		return result, err
 	}
-	body, answerErr := generate(ctx, builtin.InvestifyAnswerPrompt+"\n\nAPPROVED KNOWLEDGE\n"+builtin.LoadInvestifyAIContextSummary(), string(answerInput))
+	body, answerErr := generate(ctx, builtin.InvestifyAnswerPrompt+"\n\nSUPPORT PLAYBOOK\n"+builtin.LoadInvestifyAIContextSummary(), string(answerInput))
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -102,7 +118,7 @@ func Prepare(ctx context.Context, messages []Message, generate Generate) (Prepar
 		body = fallback(result.Language)
 		result.Fallback = true
 	}
-	result.Body = body + "\n\n" + footer(result.Language)
+	result.Body = body + "\n\n" + footer(result.Language, opt.FollowUp)
 	if utf8.RuneCountInString(result.Body) > MaxReplyRunes {
 		return Prepared{}, errors.New("support reply exceeds application limit")
 	}
@@ -174,7 +190,7 @@ func ParseDecision(raw string, messages []Message) (Decision, error) {
 	if d.Decision != "skip" && len(validIDs) == 0 {
 		return d, errors.New("support decision has no pending customer evidence")
 	}
-	for _, q := range d.Questions {
+	for i, q := range d.Questions {
 		switch q.Category {
 		case "account", "web", "portfolio", "market_data", "subscription", "ads", "brokerage", "feedback", "other":
 		default:
@@ -183,23 +199,43 @@ func ParseDecision(raw string, messages []Message) (Decision, error) {
 		if strings.TrimSpace(q.Question) == "" || len(q.MessageIDs) == 0 {
 			return d, errors.New("support question is missing evidence")
 		}
+		// Earlier messages are shown as context, and the model sometimes cites them alongside the
+		// new message. Keep only pending evidence; a question with none is an old request and is
+		// rejected, so context can never revive work on its own.
+		kept := q.MessageIDs[:0:0]
 		for _, id := range q.MessageIDs {
-			if !validIDs[id] {
-				return d, errors.New("support question cites nonpending or unknown evidence")
+			if validIDs[id] {
+				kept = append(kept, id)
 			}
 		}
+		if len(kept) == 0 {
+			return d, errors.New("support question cites nonpending or unknown evidence")
+		}
+		d.Questions[i].MessageIDs = kept
 	}
 	return d, nil
 }
 
-func footer(language string) string {
+// footer is application-owned so the model can never promise more replies than policy allows.
+// It does not state a fixed number: a second reply depends on the month's spare quota.
+func footer(language string, followUp bool) string {
+	if followUp {
+		switch language {
+		case "roman_ur":
+			return "Is mahine ka yeh aakhri automated jawab hai. Mazeed madad ke liye support@investify.pk par email karein."
+		case "ur":
+			return "اس مہینے کا یہ آخری خودکار جواب ہے۔ مزید مدد کے لیے support@investify.pk پر ای میل کریں۔"
+		default:
+			return "This is our last automated reply this month. For anything else, please email support@investify.pk."
+		}
+	}
 	switch language {
 	case "roman_ur":
-		return "WhatsApp support ke kharch ko manageable rakhne ke liye automated jawab mahine mein ek baar diya jata hai. Mazeed madad ya sawalon ke liye support@investify.pk par email karein."
+		return "WhatsApp par automated jawab har mahine mehdood hote hain. Mazeed madad ke liye support@investify.pk par email karein."
 	case "ur":
-		return "واٹس ایپ سپورٹ کے اخراجات محدود رکھنے کے لیے خودکار جواب مہینے میں ایک بار دیا جاتا ہے۔ مزید مدد یا سوالات کے لیے support@investify.pk پر ای میل کریں۔"
+		return "واٹس ایپ پر خودکار جوابات ہر مہینے محدود ہوتے ہیں۔ مزید مدد کے لیے support@investify.pk پر ای میل کریں۔"
 	default:
-		return "To keep WhatsApp support sustainable, automated replies are limited to one per month. For further help or questions, please email support@investify.pk."
+		return "Automated WhatsApp replies are limited each month. For more help, please email support@investify.pk."
 	}
 }
 

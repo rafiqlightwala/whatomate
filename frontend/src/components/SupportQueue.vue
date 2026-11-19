@@ -12,7 +12,7 @@ interface Job {
 interface QueueData {
  policy: { enabled: boolean; paused: boolean; first_run_at: string; billing_timezone: string };
  jobs: Job[]; counts: { state: string; count: number }[];
- budgets: { account: string; used: number; limit: number; resets_at: string }[];
+ budgets: { account: string; used: number; limit: number; resets_at: string; second_replies: number; pacing: { allowed: boolean; reason: string; daily_rate: number; reserved: number; spare: number; daily_second_cap: number } }[];
  monthly: { month: string; account: string; incoming_customers: number; replied_customers: number; sends: number }[];
  version: string
 }
@@ -24,7 +24,7 @@ const checks = ref<{name: string; passed: boolean; body: string}[]>([])
 async function checkPrompts() {
  checking.value = true; checks.value = []
  try {
- for (const name of ['greeting','boilerplate','login','combined','resolved','roman_urdu','vague_issue','feature_request']) {
+ for (const name of ['greeting','boilerplate','auto_reply','login','signup','portfolio_loading','combined','resolved','roman_urdu','vague_issue','feature_request','follow_up']) {
  const response = await api.post('/chatbot/support/preview', { case: name }, { timeout: 75000 })
  const result = response.data.data
  checks.value.push({name, passed: result.passed, body: `${result.prepared.decision} · ${result.prepared.language} · ${result.prepared.questions?.length || 0} questions\n${result.prepared.reason}\n${(result.prepared.questions || []).map((q: {category: string; question: string}) => `${q.category}: ${q.question}`).join('\n')}\n\n${result.prepared.body || ''}`})
@@ -68,7 +68,7 @@ onUnmounted(() => clearInterval(timer))
   <header class="hstack justify-between flex-wrap gap-2">
    <div>
     <h2 id="support-queue-title">Consolidated support queue</h2>
-    <small class="text-light">One automated reply per customer each month · 9 AM PKT · expiry protection</small>
+    <small class="text-light">Up to two automated replies per customer each month (the second only when quota allows) · 9 AM PKT · expiry protection</small>
    </div>
    <div class="hstack gap-2">
     <button type="button" class="outline small" @click="load">Refresh queue</button>
@@ -92,6 +92,11 @@ onUnmounted(() => clearInterval(timer))
       <div v-else-if="budget.used >= 950" role="alert" data-variant="warning">Fewer than 50 sends remain.</div>
       <div v-else-if="budget.used >= 800" role="alert" data-variant="warning">Monthly allowance is running low.</div>
       <small class="text-light">Includes manual sends and uncertain outcomes. Resets {{ date(budget.resets_at) }}.</small>
+      <div class="hstack flex-wrap gap-2">
+       <span class="badge" :data-variant="budget.pacing.allowed ? 'success' : 'warning'">Second replies {{ budget.pacing.allowed ? 'on' : 'held' }}</span>
+       <small>{{ budget.second_replies }} sent this month · {{ Math.max(budget.pacing.spare, 0) }} spare · up to {{ budget.pacing.daily_second_cap }} today</small>
+      </div>
+      <small class="text-light">Expecting about {{ budget.pacing.daily_rate }} first replies a day; {{ budget.pacing.reserved }} held back for them. {{ budget.pacing.reason }}</small>
      </div>
     </div>
    </div>
@@ -117,7 +122,7 @@ onUnmounted(() => clearInterval(timer))
    <div class="hstack gap-2"><button type="button" class="outline small" :disabled="page === 0" @click="page--; load()">Previous</button><button type="button" class="outline small" :disabled="(data.jobs?.length || 0) < 50" @click="page++; load()">Next</button></div>
    <details><summary>Prompt checks</summary>
     <div class="vstack gap-2">
-     <small class="text-light">Runs eight synthetic cases using the configured model. No WhatsApp messages are sent.</small>
+     <small class="text-light">Runs twelve synthetic cases using the configured model. No WhatsApp messages are sent.</small>
      <div><button type="button" class="outline small" :disabled="checking" :aria-busy="checking ? 'true' : undefined" @click="checkPrompts">{{ checking ? 'Checking prompts…' : 'Run prompt checks' }}</button></div>
      <details v-for="check in checks" :key="check.name"><summary>{{ check.passed ? 'Passed' : 'Needs attention' }}: {{ check.name }}</summary><p class="pre-wrap">{{ check.body }}</p></details>
     </div>

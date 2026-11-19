@@ -38,7 +38,7 @@ func TestPrepareCombinesQuestionsAndPreservesAttempts(t *testing.T) {
 			require.Contains(t, input, "Already checked spam")
 			return decisionJSON(sampleDecision()), nil
 		}
-		require.Contains(t, system, "APPROVED KNOWLEDGE")
+		require.Contains(t, system, "SUPPORT PLAYBOOK")
 		require.Contains(t, system, "https://www.investify.pk")
 		require.Contains(t, input, "Checked spam")
 		require.Contains(t, input, "Can I use my portfolio on a laptop?")
@@ -137,4 +137,17 @@ func TestPrepareRemovesLegacyEmailURLFromModelOutput(t *testing.T) {
 	require.NotContains(t, got.Body, "wa.recubetech.com/support/email")
 	require.Contains(t, got.Body, "support@investify.pk")
 	require.Contains(t, got.Body, "https://www.investify.pk")
+}
+
+func TestParseDecisionDropsContextEvidenceButNeedsPending(t *testing.T) {
+	msgs := []Message{
+		{ID: "old", Direction: "incoming", Text: "Portfolio not loading"},
+		{ID: "reply", Direction: "outgoing", Text: "Log out and in"},
+		{ID: "new", Direction: "incoming", Pending: true, Text: "Still not loading"},
+	}
+	d, err := ParseDecision(`{"decision":"answer","reason":"Follow-up","language":"en","summary":"Still failing","questions":[{"category":"portfolio","question":"Still not loading","message_ids":["old","new"],"attempted_steps":["logged out and in"]}]}`, msgs)
+	require.NoError(t, err)
+	require.Equal(t, []string{"new"}, d.Questions[0].MessageIDs)
+	_, err = ParseDecision(`{"decision":"answer","reason":"Old","language":"en","summary":"Old request","questions":[{"category":"portfolio","question":"Not loading","message_ids":["old"],"attempted_steps":[]}]}`, msgs)
+	require.Error(t, err, "a question backed only by context must not create work")
 }
