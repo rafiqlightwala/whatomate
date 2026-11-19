@@ -72,6 +72,7 @@ Prices refresh automatically about every minute while the app is open; pull down
 - "Chart unavailable. Pull down to retry." / "Graph could not be loaded" → pull down, check the connection, update the app.
 - Prices/charts not updating at all → check the connection, update the app, then reinstall if needed.
 - "Unusual Error: Please Restart App." → close the app fully and reopen; if it repeats, log out and in.
+- Candlestick charts: available in the apps on every chart period longer than 1D (1M, 6M, YTD, 1Y, 3Y, 5Y). Open a stock, pick one of those periods and choose candles with the chart-type button next to the chart. 1D shows a line chart only (candles are not offered for 1D). Update the app if the option is missing.
 - Dividends, bonus and book closures: each company's PSX announcements (including dividend and book-closure notices) are on its stock page. A separate dividend calendar is not available in the app yet.
 
 ## 9. Using the portfolio
