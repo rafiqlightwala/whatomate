@@ -47,11 +47,23 @@ jobs:
             ${{ env.IMAGE_TAG_SHA }}
             ${{ env.IMAGE_TAG_LATEST }}
 
+      # Calls CapRover's deploy API directly. The caprover/deploy-from-github action (CapRover CLI)
+      # always prefixes the server with "captain.", which breaks dashboards on other hostnames.
       - name: Deploy image to CapRover
-        uses: caprover/deploy-from-github@v1.1.2
-        with:
-          server: ${{ secrets.CAPROVER_SERVER }}
-          app: ${{ secrets.CAPROVER_APP_NAME }}
-          token: ${{ secrets.CAPROVER_APP_TOKEN }}
-          image: ${{ env.IMAGE_TAG_SHA }}
+        env:
+          CAPROVER_SERVER: ${{ secrets.CAPROVER_SERVER }}
+          CAPROVER_APP_NAME: ${{ secrets.CAPROVER_APP_NAME }}
+          CAPROVER_APP_TOKEN: ${{ secrets.CAPROVER_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          body=$(jq -n --arg image "$IMAGE_TAG_SHA" --arg sha "$GITHUB_SHA" \
+            '{captainDefinitionContent: ({schemaVersion: 2, imageName: $image} | tojson), gitHash: $sha}')
+          response=$(curl -sS --fail-with-body --max-time 600 \
+            -X POST "${CAPROVER_SERVER%/}/api/v2/user/apps/appData/${CAPROVER_APP_NAME}" \
+            -H "Content-Type: application/json" \
+            -H "x-namespace: captain" \
+            -H "x-captain-app-token: ${CAPROVER_APP_TOKEN}" \
+            -d "$body")
+          echo "CapRover: $(echo "$response" | jq -c '{status, description}')"
+          test "$(echo "$response" | jq -r .status)" = "100"
 
