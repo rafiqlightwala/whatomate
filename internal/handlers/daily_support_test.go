@@ -373,7 +373,8 @@ func TestSupportSecondReplySentWhenQuotaIsSpare(t *testing.T) {
 	a.processSupportJob(context.Background(), policy, job)
 	require.NoError(t, a.DB.First(&job, "id=?", job.ID).Error)
 	require.Equal(t, "ready", job.State, job.Reason)
-	require.Contains(t, job.Answer, "last automated reply this month")
+	require.Contains(t, job.Answer, "For anything else, please email support@investify.pk.")
+	require.NotContains(t, job.Answer, "automated", "replies only mention automation when asked")
 	a.processSupportJob(context.Background(), policy, job)
 	var second models.SupportSend
 	require.NoError(t, a.DB.Where("contact_id=? AND automatic AND sequence=2", contact.ID).First(&second).Error)

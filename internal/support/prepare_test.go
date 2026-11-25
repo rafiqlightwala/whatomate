@@ -151,3 +151,26 @@ func TestParseDecisionDropsContextEvidenceButNeedsPending(t *testing.T) {
 	_, err = ParseDecision(`{"decision":"answer","reason":"Old","language":"en","summary":"Old request","questions":[{"category":"portfolio","question":"Not loading","message_ids":["old"],"attempted_steps":[]}]}`, msgs)
 	require.Error(t, err, "a question backed only by context must not create work")
 }
+
+func TestFooterNeverMentionsAutomationAndSkipsDuplicateEmail(t *testing.T) {
+	for _, lang := range []string{"en", "roman_ur", "ur"} {
+		for _, follow := range []bool{false, true} {
+			f := footer(lang, follow)
+			require.Contains(t, f, "support@investify.pk")
+			require.NotContains(t, strings.ToLower(f), "automat")
+			require.NotContains(t, strings.ToLower(f), "limited")
+		}
+	}
+	msgs := []Message{{ID: "1", Direction: "incoming", Pending: true, Text: "Can I export to Excel?"}}
+	calls := 0
+	gen := func(_ context.Context, _ string, _ string) (string, error) {
+		calls++
+		if calls == 1 {
+			return `{"decision":"answer","reason":"Export","language":"en","summary":"Excel export","questions":[{"category":"portfolio","question":"Export to Excel?","message_ids":["1"],"attempted_steps":[]}]}`, nil
+		}
+		return "Excel export isn't available yet. For a copy of your data, email support@investify.pk.", nil
+	}
+	p, err := Prepare(context.Background(), msgs, gen)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(p.Body, "support@investify.pk"), "no second email line when the answer already gives it")
+}

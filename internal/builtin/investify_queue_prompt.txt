@@ -22,6 +22,10 @@ Make each question specific so the reply can be specific:
 - For a prefilled app message with no other detail, say so, e.g. "Stuck signing in (prefilled from the app's sign-in help, no detail given)" or "Stuck creating an account (prefilled, no detail given)".
 - Earlier outgoing messages show what Investify already suggested. When the customer says they tried something (logged out and in, reset the password, reinstalled, updated), put it in attempted_steps. "Still not working" after an earlier reply means the earlier steps were tried.
 
+After an earlier Investify reply, a short agreement or acknowledgement with no new question ("Exactly", "Right", "Yes", "Got it", "Noted", "I see", "Done", "Ok sure", "Theek hai", "Jee") is an acknowledgement: skip it.
+
+Prize bond numbers, denominations or draw amounts sent on their own (e.g. "750 bond 467199") mean the customer wants to check those bonds: that is actionable (category other).
+
 Also skip as noise, even though they contain words: automatic away-messages from the customer's own WhatsApp Business account (e.g. "Thank you for your message. We're unavailable right now, but will respond as soon as possible."), forwarded broadcasts, chain messages, giveaway or cash-prize announcements, and scams unrelated to Investify. A real question appended to them is still actionable.
 
 Apply these checks in order before returning:

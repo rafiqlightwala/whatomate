@@ -118,7 +118,11 @@ func Prepare(ctx context.Context, messages []Message, generate Generate, opts ..
 		body = fallback(result.Language)
 		result.Fallback = true
 	}
-	result.Body = body + "\n\n" + footer(result.Language, opt.FollowUp)
+	result.Body = body
+	if !strings.Contains(strings.ToLower(body), "support@investify.pk") {
+		// The closing line only adds the email route when the answer does not already give it.
+		result.Body = body + "\n\n" + footer(result.Language, opt.FollowUp)
+	}
 	if utf8.RuneCountInString(result.Body) > MaxReplyRunes {
 		return Prepared{}, errors.New("support reply exceeds application limit")
 	}
@@ -217,25 +221,25 @@ func ParseDecision(raw string, messages []Message) (Decision, error) {
 }
 
 // footer is application-owned so the model can never promise more replies than policy allows.
-// It does not state a fixed number: a second reply depends on the month's spare quota.
+// It does not mention automation: replies only say they are automated when a customer asks.
 func footer(language string, followUp bool) string {
 	if followUp {
 		switch language {
 		case "roman_ur":
-			return "Is mahine ka yeh aakhri automated jawab hai. Mazeed madad ke liye support@investify.pk par email karein."
+			return "Kisi aur cheez ke liye support@investify.pk par email karein."
 		case "ur":
-			return "اس مہینے کا یہ آخری خودکار جواب ہے۔ مزید مدد کے لیے support@investify.pk پر ای میل کریں۔"
+			return "کسی اور بات کے لیے support@investify.pk پر ای میل کریں۔"
 		default:
-			return "This is our last automated reply this month. For anything else, please email support@investify.pk."
+			return "For anything else, please email support@investify.pk."
 		}
 	}
 	switch language {
 	case "roman_ur":
-		return "WhatsApp par automated jawab har mahine mehdood hote hain. Mazeed madad ke liye support@investify.pk par email karein."
+		return "Mazeed madad chahiye? support@investify.pk par email karein."
 	case "ur":
-		return "واٹس ایپ پر خودکار جوابات ہر مہینے محدود ہوتے ہیں۔ مزید مدد کے لیے support@investify.pk پر ای میل کریں۔"
+		return "مزید مدد چاہیے؟ support@investify.pk پر ای میل کریں۔"
 	default:
-		return "Automated WhatsApp replies are limited each month. For more help, please email support@investify.pk."
+		return "Need more help? Email support@investify.pk."
 	}
 }
 

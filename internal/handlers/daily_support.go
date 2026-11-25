@@ -930,6 +930,9 @@ func (a *App) PreviewSupport(r *fastglue.Request) error {
 		"combined":          {Texts: []string{"I forgot my password. I already checked spam for the reset email.", "Can I use my portfolio on my laptop?", "Thanks"}, Decision: "answer", Questions: 2},
 		"resolved":          {Texts: []string{"I cannot log in", "It is fixed now, I signed in successfully. No help needed, thanks."}, Decision: "skip"},
 		"roman_urdu":        {Texts: []string{"AOA, login nahi ho raha. Laptop par bhi Investify use kar sakta hoon?"}, Decision: "answer", Questions: 2, Language: "roman_ur"},
+		"acknowledgement":   {Earlier: []string{"Candlestick charts are available on chart periods longer than 1D."}, Texts: []string{"Exactly"}, Decision: "skip"},
+		"gold_rate":         {Texts: []string{"Gold price per tola today?"}, Decision: "answer", Questions: 1, AnyOf: []string{"investify.pk/gold-rate-in-pakistan"}, NoneOf: []string{"automated"}},
+		"prize_bond":        {Texts: []string{"750 bond 467199 940624"}, Decision: "answer", Questions: 1, AnyOf: []string{"investify.pk/prize-bond"}},
 		"follow_up":         {Earlier: []string{"Tap the gear icon, then Settings, then \"Log Out\", and sign in again with the same account."}, Texts: []string{"I logged out and in but the portfolio is still empty"}, Decision: "answer", Questions: 1, AnyOf: []string{"reinstall", "uninstall", "same account", "different account", "different email"}},
 	}
 	fixture, ok := cases[input.Case]

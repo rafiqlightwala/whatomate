@@ -24,7 +24,7 @@ const checks = ref<{name: string; passed: boolean; body: string}[]>([])
 async function checkPrompts() {
  checking.value = true; checks.value = []
  try {
- for (const name of ['greeting','boilerplate','auto_reply','login','signup','portfolio_loading','combined','resolved','roman_urdu','vague_issue','feature_request','follow_up']) {
+ for (const name of ['greeting','boilerplate','auto_reply','login','signup','portfolio_loading','combined','resolved','roman_urdu','vague_issue','feature_request','follow_up','acknowledgement','gold_rate','prize_bond']) {
  const response = await api.post('/chatbot/support/preview', { case: name }, { timeout: 75000 })
  const result = response.data.data
  checks.value.push({name, passed: result.passed, body: `${result.prepared.decision} · ${result.prepared.language} · ${result.prepared.questions?.length || 0} questions\n${result.prepared.reason}\n${(result.prepared.questions || []).map((q: {category: string; question: string}) => `${q.category}: ${q.question}`).join('\n')}\n\n${result.prepared.body || ''}`})
@@ -122,7 +122,7 @@ onUnmounted(() => clearInterval(timer))
    <div class="hstack gap-2"><button type="button" class="outline small" :disabled="page === 0" @click="page--; load()">Previous</button><button type="button" class="outline small" :disabled="(data.jobs?.length || 0) < 50" @click="page++; load()">Next</button></div>
    <details><summary>Prompt checks</summary>
     <div class="vstack gap-2">
-     <small class="text-light">Runs twelve synthetic cases using the configured model. No WhatsApp messages are sent.</small>
+     <small class="text-light">Runs fifteen synthetic cases using the configured model. No WhatsApp messages are sent.</small>
      <div><button type="button" class="outline small" :disabled="checking" :aria-busy="checking ? 'true' : undefined" @click="checkPrompts">{{ checking ? 'Checking prompts…' : 'Run prompt checks' }}</button></div>
      <details v-for="check in checks" :key="check.name"><summary>{{ check.passed ? 'Passed' : 'Needs attention' }}: {{ check.name }}</summary><p class="pre-wrap">{{ check.body }}</p></details>
     </div>
